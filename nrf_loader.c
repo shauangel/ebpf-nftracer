@@ -7,27 +7,27 @@
 #include "events.h"
 #include "common.h"
 
-static volatile sig_atomic_t stop;
+// static volatile sig_atomic_t stop;
 
-static void handle_signal(int sig){ stop = 1; }
+// static void handle_signal(int sig){ stop = 1; }
 
-/* showing event logs */
-static int handle_event(void *ctx, void *data, size_t data_sz)
-{
-    const struct event *e = data;
+// /* showing event logs */
+// static int handle_event(void *ctx, void *data, size_t data_sz)
+// {
+//     const struct event *e = data;
 
-    printf("[%llu] NF=%s func=%s pid=%u tid=%u api=%s method=%s dir=%u ret=%d\n",
-           e->ts,
-           e->nf,
-           e->func,
-           e->pid,
-           e->tid,
-           e->api,
-           e->method,
-           e->direction,
-           e->ret);
-    return 0;
-}
+//     printf("[%llu] NF=%s func=%s pid=%u tid=%u api=%s method=%s dir=%u ret=%d\n",
+//            e->ts,
+//            e->nf,
+//            e->func,
+//            e->pid,
+//            e->tid,
+//            e->api,
+//            e->method,
+//            e->direction,
+//            e->ret);
+//     return 0;
+// }
 
 
 int main(int argc, char **argv){
