@@ -1,3 +1,5 @@
+/* General Schema/Structure Definition */
+
 #ifndef __EVENTS_H__
 #define __EVENTS_H__
 
@@ -6,37 +8,43 @@
 typedef uint64_t __u64;
 typedef uint32_t __u32;
 typedef uint16_t __u16;
+typedef uint8_t __u8;
 #endif
 
-enum event_kind {
-    EVENT_API  = 1,
-    EVENT_CONN = 2,
+enum direction_type {
+    IN  = 0,
+    OUT = 1,
 };
 
-enum api_id {
-    API_UNKNOWN = 0,
-    API_HTTP_REGISTER_NF_INSTANCE = 1,
-    API_HTTP_SEARCH_NF_INSTANCES  = 2,
-    API_HTTP_GET_NF_INSTANCE      = 3,
-};
 
-struct api_event {
-    __u64 ts_ns;
-    __u32 pid;
-    __u32 tid;
-    __u32 kind;
-    __u32 api_id;
-};
+/* Event Schema (connection, api) */
+struct event {
+    // Timestamp
+    __u64 ts;
 
-struct conn_event {
-    __u64 ts_ns;
-    __u32 pid;
-    __u32 tid;
-    __u32 kind;
-    __u32 saddr;
-    __u32 daddr;
-    __u16 sport;
-    __u16 dport;
+    // Process (kernel)
+    __u32 pid;               // process id
+    __u32 tid;               // thread id
+    __u64 cid;               // cgroup id
+    char func[64];           // the function that triggered
+
+    // Application (L7)
+    char nf[8];              // the running NF
+    char api[32];            // the name of api
+    char method[8];          // type of request
+    __u8 direction;          // Entry or Exit
+    int ret;                 // return value or HTTP status
+
+
+    // Network Level (L3-L4)
+    __u32 src_ip;
+    __u32 dest_ip;
+    __u16 src_port;
+    __u16 dest_port;
+
+    // Auth
+    char auth_id[32];
+    char scope[32];
 };
 
 #endif
