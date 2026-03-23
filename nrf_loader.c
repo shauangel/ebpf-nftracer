@@ -35,7 +35,7 @@ int main(int argc, char **argv){
     char exe_path[64];
     int pid;
 
-    pid = find_nf_exe("nrf", exe_path, sizeof(exe_path));
+    pid = find_nf_exe("amf", exe_path, sizeof(exe_path));
     if (pid < 0) {
         fprintf(stderr, "failed to find nrf executable\n");
         return 1;
