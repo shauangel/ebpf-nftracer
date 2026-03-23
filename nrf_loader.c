@@ -39,7 +39,7 @@ int main(int argc, char **argv){
     char exe_path[64];
     int pid;
 
-    pid = find_nf_exe("amf", exe_path, sizeof(exe_path));
+    pid = find_nf_exe("nrf", exe_path, sizeof(exe_path));
     if (pid < 0) {
         fprintf(stderr, "failed to find nrf executable\n");
         return 1;
@@ -82,7 +82,7 @@ int main(int argc, char **argv){
         &opts_register_exit
     );
 
-    
+
 
     rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_event, NULL, NULL);
     if (!rb) {
