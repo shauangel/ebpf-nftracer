@@ -9,25 +9,23 @@ BPF_CFLAGS := -O2 -g -target bpf \
 
 LIBS := -lbpf -lelf -lz
 
-all: nrf_api_tracer nrf_conn_tracer
+TARGET = nrf_loader
+BPF_OBJ = nrf_tracer.bpf.o
+SKEL = nrf_tracer.skel.h
 
-nrf_api_tracer.bpf.o: nrf_api_tracer.bpf.c vmlinux.h
-	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
+all: $(TARGET)
 
-nrf_api_tracer.skel.h: nrf_api_tracer.bpf.o
+# 1. compile eBPF program
+$(BPF_OBJ): nrf_tracer.bpf.c events.h
+	$(CLANG) $(BPF_CFLAGS) $(INCLUDES) -c $< -o $@
+
+# 2. generate skeleton
+$(SKEL): $(BPF_OBJ)
 	$(BPFTOOL) gen skeleton $< > $@
 
-nrf_api_tracer: nrf_api_tracer.c nrf_api_tracer.skel.h
-	$(CC) $(CFLAGS) nrf_api_tracer.c -o nrf_api_tracer -lbpf -lelf -lz
-
-nrf_conn_tracer.bpf.o: nrf_conn_tracer.bpf.c vmlinux.h
-	$(CLANG) $(BPF_CFLAGS) -c $< -o $@
-
-nrf_conn_tracer.skel.h: nrf_conn_tracer.bpf.o
-	$(BPFTOOL) gen skeleton $< > $@
-
-nrf_conn_tracer: nrf_conn_tracer.c nrf_conn_tracer.skel.h
-	$(CC) $(CFLAGS) nrf_conn_tracer.c -o nrf_conn_tracer -lbpf -lelf -lz
+# 3. compile user space
+$(TARGET): nrf_loader.c common.c $(SKEL)
+	$(CLANG) $(CFLAGS) $^ -o $@ $(LIBS)
 
 clean:
-	rm -f nrf_api_tracer nrf_api_tracer.bpf.o nrf_api_tracer.skel.h nrf_conn_tracer nrf_conn_tracer.bpf.o nrf_conn_tracer.skel.h
+	rm -f $(TARGET) $(BPF_OBJ) $(SKEL)
