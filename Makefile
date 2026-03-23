@@ -25,7 +25,6 @@ $(SKEL): $(BPF_OBJ)
 
 # 3. compile user space
 $(TARGET): nrf_loader.c common.c $(SKEL)
-	$(CLANG) $(CFLAGS) $^ -o $@ $(LIBS)
-
+	$(CLANG) $(CFLAGS) -D__USER_SPACE__ nrf_loader.c common.c -o $@ $(LIBS)
 clean:
 	rm -f $(TARGET) $(BPF_OBJ) $(SKEL)
