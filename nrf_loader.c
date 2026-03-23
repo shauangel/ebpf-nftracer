@@ -52,9 +52,9 @@ int main(int argc, char **argv){
         .retprobe = false,
         .func_name = "github.com/free5gc/nrf/internal/sbi.(*Server).HTTPRegisterNFInstance");
 
-    LIBBPF_OPTS(bpf_uprobe_opts, opts_register_exit, 
-        .retprobe = true,
-        .func_name = "github.com/free5gc/nrf/internal/sbi.(*Server).HTTPRegisterNFInstance");
+    // LIBBPF_OPTS(bpf_uprobe_opts, opts_register_exit, 
+    //     .retprobe = true,
+    //     .func_name = "github.com/free5gc/nrf/internal/sbi.(*Server).HTTPRegisterNFInstance");
 
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -74,13 +74,13 @@ int main(int argc, char **argv){
         &opts_register_entry
     );
 
-    skel->links.nrf_registry_exit = bpf_program__attach_uprobe_opts(
-        skel->progs.nrf_registry_exit,
-        pid,
-        exe_path,
-        0,
-        &opts_register_exit
-    );
+    // skel->links.nrf_registry_exit = bpf_program__attach_uprobe_opts(
+    //     skel->progs.nrf_registry_exit,
+    //     pid,
+    //     exe_path,
+    //     0,
+    //     &opts_register_exit
+    // );
 
 
 
