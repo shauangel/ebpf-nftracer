@@ -32,7 +32,7 @@
 
 int main(int argc, char **argv){
 
-    char exe_path[PATH_MAX];
+    char exe_path[64];
     int pid;
 
     pid = find_nf_exe("nrf", exe_path, sizeof(exe_path));
