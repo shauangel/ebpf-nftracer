@@ -37,9 +37,6 @@ struct event {
     char nf[8];              // the running NF
     char api[32];            // the name of api
     // char method[8];          // type of request
-    // __u8 direction;          // Entry or Exit
-    // int ret;                 // return value or HTTP status
-
 
     // Network Level (L3-L4)
     // __u32 src_ip;

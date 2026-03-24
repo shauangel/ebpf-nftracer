@@ -31,50 +31,48 @@ static __always_inline void fill_app_context(struct event *e, const char *nf_nam
     bpf_probe_read_kernel_str(e->nf, sizeof(e->nf), nf_name);
 }
 
+// Parse Args
+// static __always_inline void parse_args(struct event *e, const )
+
 
 /* API Interception */
 /* -------------- TO-DO (Need to find the real function names) -------------- */
 
 /* Register API*/
-// SEC("uprobe/nrf_reg_args")
-// int nrf_reg_args(struct pt_regs *ctx){
-//     struct event *e;
-//     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-//     if(!e){ return 0; }
+SEC("uprobe/nrf_reg_args")
+int nrf_reg_args(struct pt_regs *ctx){
+    struct event *e;
+    e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if(!e){ return 0; }
 
-//     __builtin_memset(e, 0, sizeof(*e));
+    __builtin_memset(e, 0, sizeof(*e));
 
-//     fill_process_context(e);
+    fill_process_context(e);
 
-//     __builtin_memcpy(e->nf, "NRF", 4);
-//     __builtin_memcpy(e->api, "NFRegister", 15);
-//     // __builtin_memcpy(e->func, "NFRegisterProcedure", 20);
+    __builtin_memcpy(e->nf, "NRF", 4);
+    __builtin_memcpy(e->api, "NFRegister", 15);
 
-//     e->arg4 = PT_REGS_PARM4(ctx);
-//     __u64 hdr[8] = {};
-//     if (e->arg4) {
-//         bpf_probe_read_user(hdr, sizeof(hdr), (void *)e->arg4);
+    e->dbg.arg4 = PT_REGS_PARM4(ctx);
+    if (e->dbg.arg4) {
+        bpf_probe_read_user(e->dbg.q, sizeof(e->dbg.q), (void *)e->dbg.arg4);
 
-//         e->p1 = hdr[0];
-//         e->l1 = hdr[1];
-//         e->p3 = hdr[4];
-//         e->l3 = hdr[5];
-//         e->p4 = hdr[6];
-//         e->l4 = hdr[7];
+        if (e->dbg.q[0] && e->dbg.q[1] > 0 && e->dbg.q[1] < sizeof(e->dbg.buf0))
+            bpf_probe_read_user(e->dbg.buf0, e->dbg.q[1], (void *)e->dbg.q[0]);
 
-//         if (e->p1 && e->l1 > 0 && e->l1 < sizeof(e->s1))
-//             bpf_probe_read_user(e->s1, e->l1, (void *)e->p1);
+        if(e->dbg.q[2] && e->dbg.q[3] > 0 && e->dbg.q[3] < sizeof(e->dbg.buf1))
+            bpf_probe_read_user(e->dbg.buf1, e->dbg.q[3], (void *)e->dbg.q[2]);
 
-//         if (e->p3 && e->l3 > 0 && e->l3 < sizeof(e->s3))
-//             bpf_probe_read_user(e->s3, e->l3, (void *)e->p3);
+        if(e->dbg.q[4] && e->dbg.q[5] > 0 && e->dbg.q[5] < sizeof(e->dbg.buf2))
+            bpf_probe_read_user(e->dbg.buf2, e->dbg.q[5], (void *)e->dbg.q[4]);
 
-//         if (e->p4 && e->l4 > 0 && e->l4 < sizeof(e->s4))
-//             bpf_probe_read_user(e->s4, e->l4, (void *)e->p4);
-//     }
+        // 
+        if(e->dbg.q[6] && e->dbg.q[7] > 0 && e->dbg.q[7] < sizeof(e->dbg.buf3))
+            bpf_probe_read_user(e->dbg.buf3, e->dbg.q[7], (void *)e->dbg.q[6]);
+    }
 
-//     bpf_ringbuf_submit(e, 0);
-//     return 0;
-// }
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
 
 /* Access Token Verif */
 SEC("uprobe/nrf_ac_args")
@@ -88,25 +86,26 @@ int nrf_ac_args(struct pt_regs *ctx){
     __builtin_memcpy(e->nf, "NRF", 4);
     __builtin_memcpy(e->api, "AccessToken", 15);
 
-    // e->arg1 = PT_REGS_PARM1(ctx);
-    // e->arg2 = PT_REGS_PARM2(ctx);
-    // e->arg3 = PT_REGS_PARM3(ctx);
     e->dbg.arg4 = PT_REGS_PARM4(ctx);
     if (e->dbg.arg4)
         bpf_probe_read_user(e->dbg.q, sizeof(e->dbg.q), (void *)e->dbg.arg4);
-
+        // GrantType
         if(e->dbg.q[4] && e->dbg.q[5] > 0 && e->dbg.q[5] < sizeof(e->dbg.buf0))
             bpf_probe_read_user(e->dbg.buf0, e->dbg.q[5], (void *)e->dbg.q[4]);
 
+        // NFInstanceID
         if(e->dbg.q[6] && e->dbg.q[7] > 0 && e->dbg.q[7] < sizeof(e->dbg.buf1))
             bpf_probe_read_user(e->dbg.buf1, e->dbg.q[7], (void *)e->dbg.q[6]);
 
+        // request NF
         if(e->dbg.q[8] && e->dbg.q[9] > 0 && e->dbg.q[9] < sizeof(e->dbg.buf2))
             bpf_probe_read_user(e->dbg.buf2, e->dbg.q[9], (void *)e->dbg.q[8]);
 
+        // response NF
         if(e->dbg.q[10] && e->dbg.q[11] > 0 && e->dbg.q[11] < sizeof(e->dbg.buf3))
             bpf_probe_read_user(e->dbg.buf3, e->dbg.q[11], (void *)e->dbg.q[10]);
 
+        // ???
         if(e->dbg.q[12] && e->dbg.q[13] > 0 && e->dbg.q[13] < sizeof(e->dbg.buf4))
             bpf_probe_read_user(e->dbg.buf4, e->dbg.q[13], (void *)e->dbg.q[12]);
 

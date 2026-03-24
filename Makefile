@@ -10,7 +10,7 @@ BPF_CFLAGS := -O2 -g -target bpf \
 
 LIBS := -lbpf -lelf -lz
 
-NF = amf
+NF = nrf
 TARGET = $(NF)_loader
 BPF_OBJ = $(NF)_tracer.bpf.o
 SKEL = $(NF)_tracer.skel.h

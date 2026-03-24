@@ -22,19 +22,24 @@ static void handle_signal(int sig){ stop = 1; }
 //     return 0;
 // }
 
-static int handle_tok(void *ctx, void *data, size_t data_sz)
+static int handle_event(void *ctx, void *data, size_t data_sz)
 {
     const struct event *e = data;
     printf("[%s: %s] pid=%u tid=%u\n",e->nf, e->api, e->pid, e->tid);
-    for(int i=0; i<16; i++){
-        printf("%llx ", e->dbg.q[i]);
-    }
-    printf("\n");
-    printf("paramA: %s\n", e->dbg.buf0);
-    printf("paramB: %s\n", e->dbg.buf1);
-    printf("paramC: %s\n", e->dbg.buf2);
-    printf("paramD: %s\n", e->dbg.buf3);
-    printf("paramE: %s\n", e->dbg.buf4);
+    // for(int i=0; i<16; i++){
+    //     printf("%llx ", e->dbg.q[i]);
+    // }
+    // printf("\n");
+    if(!e->dbg.buf0)
+        printf("paramA: %s\n", e->dbg.buf0);
+    if(!e->dbg.buf1)
+        printf("paramB: %s\n", e->dbg.buf1);
+    if(!e->dbg.buf2)
+        printf("paramC: %s\n", e->dbg.buf2);
+    if(!e->dbg.buf3)
+        printf("paramD: %s\n", e->dbg.buf3);
+    if(!e->dbg.buf4)
+        printf("paramE: %s\n", e->dbg.buf4);
 
     // printf("arg1=%llx arg2=%llx arg3=%llx arg4=%llx\n", e->arg1, e->arg2, e->arg3, e->arg4);
     // printf("arg4: \n");
@@ -77,9 +82,9 @@ int main(int argc, char **argv){
 
 
     /* Libbpf Option Initialization Macro */
-    // LIBBPF_OPTS(bpf_uprobe_opts, opts_reg_args, 
-    //     .retprobe = false,
-    //     .func_name = "github.com/free5gc/nrf/internal/sbi/processor.(*Processor).NFRegisterProcedure");
+    LIBBPF_OPTS(bpf_uprobe_opts, opts_reg_args, 
+        .retprobe = false,
+        .func_name = "github.com/free5gc/nrf/internal/sbi/processor.(*Processor).NFRegisterProcedure");
     
 
     LIBBPF_OPTS(bpf_uprobe_opts, opts_ac_args, 
@@ -96,13 +101,13 @@ int main(int argc, char **argv){
         return 1;
     }
 
-    // skel->links.nrf_reg_args = bpf_program__attach_uprobe_opts(
-    //     skel->progs.nrf_reg_args,
-    //     pid,
-    //     exe_path,
-    //     0,
-    //     &opts_reg_args
-    // );
+    skel->links.nrf_reg_args = bpf_program__attach_uprobe_opts(
+        skel->progs.nrf_reg_args,
+        pid,
+        exe_path,
+        0,
+        &opts_reg_args
+    );
 
     skel->links.nrf_ac_args = bpf_program__attach_uprobe_opts(
         skel->progs.nrf_ac_args,
@@ -112,7 +117,7 @@ int main(int argc, char **argv){
         &opts_ac_args
     );
 
-    rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_tok, NULL, NULL);
+    rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_event, NULL, NULL);
     if (!rb) {
         fprintf(stderr, "failed to create ring buffer\n");
         nrf_tracer_bpf__destroy(skel);
