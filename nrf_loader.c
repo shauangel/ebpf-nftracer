@@ -30,6 +30,20 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     return 0;
 }
 
+static int handle_args(void *ctx, void *data, size_t data_sz)
+{
+    const struct event *e = data;
+    printf("pid=%u tid=%u a1=%llx a2=%llx a3=%llx a4=%llx\n", 
+        e->pid, 
+        e->tid, 
+        e->arg1, 
+        e->arg2, 
+        e->arg3, 
+        e->arg4
+    );
+    return 0;
+}
+
 
 int main(int argc, char **argv){
     struct ring_buffer *rb = NULL;
@@ -49,13 +63,17 @@ int main(int argc, char **argv){
 
 
     /* Libbpf Option Initialization Macro */
-    LIBBPF_OPTS(bpf_uprobe_opts, opts_register_entry, 
-        .retprobe = false,
-        .func_name = "github.com/free5gc/nrf/internal/sbi.(*Server).HTTPRegisterNFInstance");
+    // LIBBPF_OPTS(bpf_uprobe_opts, opts_register_entry, 
+    //     .retprobe = false,
+    //     .func_name = "github.com/free5gc/nrf/internal/sbi.(*Server).HTTPRegisterNFInstance");
 
-    LIBBPF_OPTS(bpf_uprobe_opts, opts_api_exit, 
+    LIBBPF_OPTS(bpf_uprobe_opts, opts_reg_args, 
         .retprobe = false,
-        .func_name = "github.com/gin-gonic/gin.(*responseWriter).WriteHeader");
+        .func_name = "github.com/free5gc/nrf/internal/sbi/processor.(*Processor).NFRegisterProcedure");
+
+    // LIBBPF_OPTS(bpf_uprobe_opts, opts_api_exit, 
+    //     .retprobe = false,
+    //     .func_name = "github.com/gin-gonic/gin.(*responseWriter).WriteHeader");
 
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -67,25 +85,33 @@ int main(int argc, char **argv){
         return 1;
     }
 
-    skel->links.nrf_registry_entry = bpf_program__attach_uprobe_opts(
-        skel->progs.nrf_registry_entry,
+    // skel->links.nrf_registry_entry = bpf_program__attach_uprobe_opts(
+    //     skel->progs.nrf_registry_entry,
+    //     pid,
+    //     exe_path,
+    //     0,
+    //     &opts_register_entry
+    // );
+
+    // skel->links.nrf_api_exit = bpf_program__attach_uprobe_opts(
+    //     skel->progs.nrf_api_exit,
+    //     pid,
+    //     exe_path,
+    //     0,
+    //     &opts_api_exit
+    // );
+
+    skel->links.nrf_reg_args = bpf_program__attach_uprobe_opts(
+        skel->progs.nrf_reg_args,
         pid,
         exe_path,
         0,
-        &opts_register_entry
-    );
-
-    skel->links.nrf_api_exit = bpf_program__attach_uprobe_opts(
-        skel->progs.nrf_api_exit,
-        pid,
-        exe_path,
-        0,
-        &opts_api_exit
+        &opts_reg_args
     );
 
 
 
-    rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_event, NULL, NULL);
+    rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_args, NULL, NULL);
     if (!rb) {
         fprintf(stderr, "failed to create ring buffer\n");
         nrf_tracer_bpf__destroy(skel);
