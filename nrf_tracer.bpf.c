@@ -92,6 +92,8 @@ int nrf_ac_args(struct pt_regs *ctx){
     e->arg2 = PT_REGS_PARM2(ctx);
     e->arg3 = PT_REGS_PARM3(ctx);
     e->arg4 = PT_REGS_PARM4(ctx);
+    if (e->arg2)
+        bpf_probe_read_user(e->probe_test, sizeof(e->probe_test), (void *)e->arg2);
 
     bpf_ringbuf_submit(e, 0);
     return 0;
