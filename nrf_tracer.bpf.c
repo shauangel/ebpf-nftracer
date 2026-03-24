@@ -93,6 +93,8 @@ static __always_inline void fill_app_context(struct event *e, const char *nf_nam
         e->arg2 = PT_REGS_PARM2(ctx);
         e->arg3 = PT_REGS_PARM3(ctx);
         e->arg4 = PT_REGS_PARM4(ctx);
+        if (e->arg3)
+            bpf_probe_read_user(e->probe3, sizeof(e->probe3), (void *)e->arg3);
 
         bpf_ringbuf_submit(e, 0);
         return 0;

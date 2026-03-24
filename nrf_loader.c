@@ -41,6 +41,9 @@ static int handle_args(void *ctx, void *data, size_t data_sz)
         e->arg3, 
         e->arg4
     );
+    for (int i = 0; i < 32; i++)
+        printf("%02x ", (unsigned char)e->probe3[i]);
+    printf("\n");
     return 0;
 }
 

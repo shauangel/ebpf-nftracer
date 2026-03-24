@@ -51,6 +51,8 @@ struct event {
     __u64 arg2;
     __u64 arg3;
     __u64 arg4;
+    char probe3[64];
+
 
 };
 
