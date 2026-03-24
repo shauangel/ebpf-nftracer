@@ -29,7 +29,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     printf("paramD: %s\n", e->dbg.buf3);
     printf("paramE: %s\n", e->dbg.buf4);
 
-    printf("arg1=%llu arg2=%llu arg3=%llu arg4=%llu", e->dbg.arg1, e->dbg.arg2, e->dbg.arg3, e->dbg.arg4);
+    printf("arg1=%llu arg2=%llu arg3=%llu arg4=%llu\n\n", e->dbg.arg1, e->dbg.arg2, e->dbg.arg3, e->dbg.arg4);
 
     return 0;
 }
