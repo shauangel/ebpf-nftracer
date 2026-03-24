@@ -16,12 +16,13 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
 {
     const struct event *e = data;
 
-    printf("[%llu] NF=%s func=%s pid=%u tid=%u api=%s method=%s dir=%u ret=%d\n",
+    printf("[%llu] NF=%s func=%s pid=%u tid=%u cid=%u api=%s method=%s dir=%u ret=%d\n",
            e->ts,
            e->nf,
            e->func,
            e->pid,
            e->tid,
+           e->cid,
            e->api,
            e->method,
            e->direction,
