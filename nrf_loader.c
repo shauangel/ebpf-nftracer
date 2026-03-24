@@ -33,17 +33,12 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
 static int handle_args(void *ctx, void *data, size_t data_sz)
 {
     const struct event *e = data;
-    printf("pid=%u tid=%u a1=%llx a2=%llx a3=%llx a4=%llx\n", 
-        e->pid, 
-        e->tid, 
-        e->arg1, 
-        e->arg2, 
-        e->arg3, 
-        e->arg4
-    );
-    for (int i = 0; i < 64; i++)
-        printf("%02x ", (unsigned char)e->probe3[i]);
-    printf("\n");
+    printf("pid=%u tid=%u a1=%llx a2=%llx a3=%llx a4=%llx\n",
+        e->pid, e->tid, e->arg1, e->arg2, e->arg3, e->arg4);
+
+    printf("p1=%llx l1=%llu s1=%s\n", e->p1, e->l1, e->s1);
+    printf("p3=%llx l3=%llu s3=%s\n", e->p3, e->l3, e->s3);
+    printf("p4=%llx l4=%llu s4=%s\n", e->p4, e->l4, e->s4);
     return 0;
 }
 

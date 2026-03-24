@@ -51,8 +51,12 @@ struct event {
     __u64 arg2;
     __u64 arg3;
     __u64 arg4;
-    char probe3[64];
-
+    // char probe3[64];
+    char s1[40];
+    char s3[8];
+    char s4[16];
+    __u64 p1, p3, p4;
+    __u64 l1, l3, l4;
 
 };
 
