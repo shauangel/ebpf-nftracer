@@ -30,16 +30,11 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     //     printf("%llx ", e->dbg.q[i]);
     // }
     // printf("\n");
-    if(!e->dbg.buf0)
-        printf("paramA: %s\n", e->dbg.buf0);
-    if(!e->dbg.buf1)
-        printf("paramB: %s\n", e->dbg.buf1);
-    if(!e->dbg.buf2)
-        printf("paramC: %s\n", e->dbg.buf2);
-    if(!e->dbg.buf3)
-        printf("paramD: %s\n", e->dbg.buf3);
-    if(!e->dbg.buf4)
-        printf("paramE: %s\n", e->dbg.buf4);
+    printf("paramA: %s\n", e->dbg.buf0);
+    printf("paramB: %s\n", e->dbg.buf1);
+    printf("paramC: %s\n", e->dbg.buf2);
+    printf("paramD: %s\n", e->dbg.buf3);
+    printf("paramE: %s\n", e->dbg.buf4);
 
     // printf("arg1=%llx arg2=%llx arg3=%llx arg4=%llx\n", e->arg1, e->arg2, e->arg3, e->arg4);
     // printf("arg4: \n");
