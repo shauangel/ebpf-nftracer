@@ -29,7 +29,7 @@ static int handle_tok(void *ctx, void *data, size_t data_sz)
     for(int i=0; i<16; i++){
         printf("%llx ", e->dbg.q[i]);
     }
-    printf("\n")
+    printf("\n");
     // printf("arg1=%llx arg2=%llx arg3=%llx arg4=%llx\n", e->arg1, e->arg2, e->arg3, e->arg4);
     // printf("arg4: \n");
     // for(int i=0; i<64; i++){
