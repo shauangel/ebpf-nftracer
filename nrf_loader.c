@@ -12,16 +12,6 @@ static volatile sig_atomic_t stop;
 static void handle_signal(int sig){ stop = 1; }
 
 /* showing event logs */
-// static int handle_args(void *ctx, void *data, size_t data_sz)
-// {
-//     const struct event *e = data;
-//     printf("[%s: %s] pid=%u tid=%u\n",e->nf, e->api, e->pid, e->tid);
-//     printf("p1=%llx l1=%llu s1=%s\n", e->p1, e->l1, e->s1);
-//     printf("p3=%llx l3=%llu s3=%s\n", e->p3, e->l3, e->s3);
-//     printf("p4=%llx l4=%llu s4=%s\n", e->p4, e->l4, e->s4);
-//     return 0;
-// }
-
 static int handle_event(void *ctx, void *data, size_t data_sz)
 {
     const struct event *e = data;
@@ -39,11 +29,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     printf("paramD: %s\n", e->dbg.buf3);
     printf("paramE: %s\n", e->dbg.buf4);
 
-    // printf("arg4: \n");
-    // for(int i=0; i<64; i++){
-    //     printf("%02x ", (unsigned char)e->probe_test[i]);
-    // }
-    // printf("\n");
+    printf("arg1=%llu arg2=%llu arg3=%llu arg4=%llu", e->dbg.arg1, e->dbg.arg2, e->dbg.arg3, e->dbg.arg4);
 
     return 0;
 }
@@ -74,9 +60,9 @@ int main(int argc, char **argv){
         .retprobe = false,
         .func_name = "github.com/free5gc/nrf/internal/sbi/processor.(*Processor).AccessTokenProcedure");
     
-    LIBBPF_OPTS(bpf_uprobe_opts, opts_handle_ac_req, 
+    LIBBPF_OPTS(bpf_uprobe_opts, opts_oauth_verif, 
         .retprobe = false,
-        .func_name = "github.com/free5gc/nrf/internal/sbi/processor.(*Processor).HandleAccessTokenRequest");
+        .func_name = "github.com/free5gc/openapi/oauth.VerifyOAuth");
     
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -104,12 +90,12 @@ int main(int argc, char **argv){
         &opts_ac_args
     );
 
-    skel->links.handle_ac_req = bpf_program__attach_uprobe_opts(
-        skel->progs.handle_ac_req,
+    skel->links.nrf_oauth_verif = bpf_program__attach_uprobe_opts(
+        skel->progs.nrf_oauth_verif,
         pid,
         exe_path,
         0,
-        &opts_handle_ac_req
+        &opts_oauth_verif
     );
 
     rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_event, NULL, NULL);
