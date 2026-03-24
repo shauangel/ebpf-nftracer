@@ -5,7 +5,8 @@ BPFTOOL ?= bpftool
 CFLAGS := -O2 -g -D__USER_SPACE__
 BPF_CFLAGS := -O2 -g -target bpf \
 	-I/usr/include \
-	-I/usr/include/x86_64-linux-gnu
+	-I/usr/include/x86_64-linux-gnu \
+	-D__TARGET_ARCH_x86
 
 LIBS := -lbpf -lelf -lz
 
