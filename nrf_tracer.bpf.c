@@ -36,45 +36,45 @@ static __always_inline void fill_app_context(struct event *e, const char *nf_nam
 /* -------------- TO-DO (Need to find the real function names) -------------- */
 
 /* Register API*/
-SEC("uprobe/nrf_reg_args")
-int nrf_reg_args(struct pt_regs *ctx){
-    struct event *e;
-    e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-    if(!e){ return 0; }
+// SEC("uprobe/nrf_reg_args")
+// int nrf_reg_args(struct pt_regs *ctx){
+//     struct event *e;
+//     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+//     if(!e){ return 0; }
 
-    __builtin_memset(e, 0, sizeof(*e));
+//     __builtin_memset(e, 0, sizeof(*e));
 
-    fill_process_context(e);
+//     fill_process_context(e);
 
-    __builtin_memcpy(e->nf, "NRF", 4);
-    __builtin_memcpy(e->api, "NFRegister", 15);
-    // __builtin_memcpy(e->func, "NFRegisterProcedure", 20);
+//     __builtin_memcpy(e->nf, "NRF", 4);
+//     __builtin_memcpy(e->api, "NFRegister", 15);
+//     // __builtin_memcpy(e->func, "NFRegisterProcedure", 20);
 
-    e->arg4 = PT_REGS_PARM4(ctx);
-    __u64 hdr[8] = {};
-    if (e->arg4) {
-        bpf_probe_read_user(hdr, sizeof(hdr), (void *)e->arg4);
+//     e->arg4 = PT_REGS_PARM4(ctx);
+//     __u64 hdr[8] = {};
+//     if (e->arg4) {
+//         bpf_probe_read_user(hdr, sizeof(hdr), (void *)e->arg4);
 
-        e->p1 = hdr[0];
-        e->l1 = hdr[1];
-        e->p3 = hdr[4];
-        e->l3 = hdr[5];
-        e->p4 = hdr[6];
-        e->l4 = hdr[7];
+//         e->p1 = hdr[0];
+//         e->l1 = hdr[1];
+//         e->p3 = hdr[4];
+//         e->l3 = hdr[5];
+//         e->p4 = hdr[6];
+//         e->l4 = hdr[7];
 
-        if (e->p1 && e->l1 > 0 && e->l1 < sizeof(e->s1))
-            bpf_probe_read_user(e->s1, e->l1, (void *)e->p1);
+//         if (e->p1 && e->l1 > 0 && e->l1 < sizeof(e->s1))
+//             bpf_probe_read_user(e->s1, e->l1, (void *)e->p1);
 
-        if (e->p3 && e->l3 > 0 && e->l3 < sizeof(e->s3))
-            bpf_probe_read_user(e->s3, e->l3, (void *)e->p3);
+//         if (e->p3 && e->l3 > 0 && e->l3 < sizeof(e->s3))
+//             bpf_probe_read_user(e->s3, e->l3, (void *)e->p3);
 
-        if (e->p4 && e->l4 > 0 && e->l4 < sizeof(e->s4))
-            bpf_probe_read_user(e->s4, e->l4, (void *)e->p4);
-    }
+//         if (e->p4 && e->l4 > 0 && e->l4 < sizeof(e->s4))
+//             bpf_probe_read_user(e->s4, e->l4, (void *)e->p4);
+//     }
 
-    bpf_ringbuf_submit(e, 0);
-    return 0;
-}
+//     bpf_ringbuf_submit(e, 0);
+//     return 0;
+// }
 
 /* Access Token Verif */
 SEC("uprobe/nrf_ac_args")
@@ -91,23 +91,9 @@ int nrf_ac_args(struct pt_regs *ctx){
     // e->arg1 = PT_REGS_PARM1(ctx);
     // e->arg2 = PT_REGS_PARM2(ctx);
     // e->arg3 = PT_REGS_PARM3(ctx);
-    e->arg4 = PT_REGS_PARM4(ctx);
-    __u64 hdr[8] = {};
-    if (e->arg4)
-        bpf_probe_read_user(hdr, sizeof(hdr), (void *)e->arg4);
-
-    // if (hdr[0])
-    //     bpf_probe_read_user(e->buf0, sizeof(e->buf0), (void *)hdr[0]);
-
-    // if (hdr[1])
-    //     bpf_probe_read_user(e->buf1, sizeof(e->buf1), (void *)hdr[1]);
-    // hdr[4]: parameterA, hdr[5]: len of parameterA
-    if(hdr[4] && hdr[5] > 0 && hdr[5] < sizeof(e->buf0))
-        bpf_probe_read_user(e->buf0, hdr[5], (void *)hdr[4]);
-    // hdr[6]: parameterB, hdr[7]: len of parameterB
-    if(hdr[6] && hdr[7] > 0 && hdr[7] < sizeof(e->buf1))
-        bpf_probe_read_user(e->buf1, hdr[7], (void *)hdr[6]);
-
+    e->dbg.arg4 = PT_REGS_PARM4(ctx);
+    if (e->dbg.arg4)
+        bpf_probe_read_user(e->dbg.q, sizeof(e->dbg.q), (void *)e->arg4);
     bpf_ringbuf_submit(e, 0);
     return 0;
 };

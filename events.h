@@ -16,6 +16,13 @@ enum direction_type {
     OUT = 1,
 };
 
+struct debug_args {
+    __u64 arg1, arg2, agr3, agr4;
+    __u64 q[16] = {};
+    char buf0[64], buf1[64], buf3[64], buf4[64];
+    __u64 p1, p2, p3, p4;
+    __u64 l1, l2, l3, l4;
+}
 
 /* Event Schema (connection, api) */
 struct event {
@@ -47,18 +54,7 @@ struct event {
     char scope[32];
 
     // Args
-    __u64 arg1;
-    __u64 arg2;
-    __u64 arg3;
-    __u64 arg4;
-    char probe_test[64];
-    char s1[40];
-    char s3[8];
-    char s4[16];
-    __u64 p1, p3, p4;
-    __u64 l1, l3, l4;
-    char buf0[64], buf1[64];
-
+    struct debug_args dbg;
 };
 
 
