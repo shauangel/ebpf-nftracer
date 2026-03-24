@@ -26,10 +26,16 @@ static int handle_tok(void *ctx, void *data, size_t data_sz)
 {
     const struct event *e = data;
     printf("[%s: %s] pid=%u tid=%u\n",e->nf, e->api, e->pid, e->tid);
-    for(int i=0; i<16; i++){
-        printf("%llx ", e->dbg.q[i]);
-    }
-    printf("\n");
+    // for(int i=0; i<16; i++){
+    //     printf("%llx ", e->dbg.q[i]);
+    // }
+    // printf("\n");
+    printf("paramA: %s\n", e->dbg.buf0);
+    printf("paramB: %s\n", e->dbg.buf1);
+    printf("paramC: %s\n", e->dbg.buf2);
+    printf("paramD: %s\n", e->dbg.buf3);
+    printf("paramE: %s\n", e->dbg.buf4);
+
     // printf("arg1=%llx arg2=%llx arg3=%llx arg4=%llx\n", e->arg1, e->arg2, e->arg3, e->arg4);
     // printf("arg4: \n");
     // for(int i=0; i<64; i++){

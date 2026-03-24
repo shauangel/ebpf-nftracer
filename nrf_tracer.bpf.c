@@ -94,6 +94,22 @@ int nrf_ac_args(struct pt_regs *ctx){
     e->dbg.arg4 = PT_REGS_PARM4(ctx);
     if (e->dbg.arg4)
         bpf_probe_read_user(e->dbg.q, sizeof(e->dbg.q), (void *)e->dbg.arg4);
+
+        if(e->dbg.q[4] && e->dbg.q[5] > 0 && e->dbg.q[5] < sizeof(e->dbg.buf0))
+            bpf_probe_read_user(e->dbg.buf0, e->dbg.q[5], (void *)e->dbg.q[4]);
+
+        if(e->dbg.q[6] && e->dbg.q[7] > 0 && e->dbg.q[6] < sizeof(e->dbg.buf1))
+            bpf_probe_read_user(e->dbg.buf1, e->dbg.q[6], (void *)e->dbg.q[5]);
+
+        if(e->dbg.q[8] && e->dbg.q[9] > 0 && e->dbg.q[9] < sizeof(e->dbg.buf2))
+            bpf_probe_read_user(e->dbg.buf2, e->dbg.q[9], (void *)e->dbg.q[8]);
+
+        if(e->dbg.q[10] && e->dbg.q[11] > 0 && e->dbg.q[11] < sizeof(e->dbg.buf3))
+            bpf_probe_read_user(e->dbg.buf3, e->dbg.q[11], (void *)e->dbg.q[10]);
+
+        if(e->dbg.q[12] && e->dbg.q[13] > 0 && e->dbg.q[13] < sizeof(e->dbg.buf4))
+            bpf_probe_read_user(e->dbg.buf4, e->dbg.q[13], (void *)e->dbg.q[12]);
+
     bpf_ringbuf_submit(e, 0);
     return 0;
 };
