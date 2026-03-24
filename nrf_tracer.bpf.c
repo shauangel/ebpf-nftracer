@@ -88,13 +88,20 @@ int nrf_ac_args(struct pt_regs *ctx){
     __builtin_memcpy(e->nf, "NRF", 4);
     __builtin_memcpy(e->api, "AccessToken", 15);
 
-    e->arg1 = PT_REGS_PARM1(ctx);
+    // e->arg1 = PT_REGS_PARM1(ctx);
     e->arg2 = PT_REGS_PARM2(ctx);
-    e->arg3 = PT_REGS_PARM3(ctx);
-    e->arg4 = PT_REGS_PARM4(ctx);
+    // e->arg3 = PT_REGS_PARM3(ctx);
+    // e->arg4 = PT_REGS_PARM4(ctx);
+    __u64 hdr[8] = {};
     if (e->arg2)
-        bpf_probe_read_user(e->probe_test, sizeof(e->probe_test), (void *)e->arg2);
+        bpf_probe_read_user(hdr, sizeof(hdr), (void *)e->arg2);
 
+    if (hdr[0])
+        bpf_probe_read_user(e->buf0, sizeof(e->buf0), (void *)hdr[0]);
+
+    if (hdr[1])
+        bpf_probe_read_user(e->buf1, sizeof(e->buf1), (void *)hdr[1]);
+        
     bpf_ringbuf_submit(e, 0);
     return 0;
 };

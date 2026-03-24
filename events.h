@@ -57,6 +57,7 @@ struct event {
     char s4[16];
     __u64 p1, p3, p4;
     __u64 l1, l3, l4;
+    char buf0[64], buf1[64];
 
 };
 

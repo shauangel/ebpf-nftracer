@@ -27,9 +27,22 @@ static int handle_tok(void *ctx, void *data, size_t data_sz)
     const struct event *e = data;
     printf("[%s: %s] pid=%u tid=%u\n",e->nf, e->api, e->pid, e->tid);
     printf("arg1=%llx arg2=%llx arg3=%llx arg4=%llx\n", e->arg1, e->arg2, e->arg3, e->arg4);
-
+    printf("arg2: \n");
     for(int i=0; i<64; i++){
         printf("%02x ", (unsigned char)e->probe_test[i]);
+    }
+    printf("\n");
+
+    printf("arg2-q0: \n");
+    for(int i=0; i<64; i++){
+        printf("%02x ", (unsigned char)e->buf0[i]);
+    }
+    printf("\n");
+
+
+    printf("arg2-q1: \n");
+    for(int i=0; i<64; i++){
+        printf("%02x ", (unsigned char)e->buf1[i]);
     }
     printf("\n");
     return 0;
@@ -66,7 +79,7 @@ int main(int argc, char **argv){
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
 
-    /* TODO: Load BPF skeleton & link macro */
+    /* Load BPF skeleton & link macro */
     skel = nrf_tracer_bpf__open_and_load();
     if (!skel) {
         fprintf(stderr, "failed to open and load skeleton\n");
