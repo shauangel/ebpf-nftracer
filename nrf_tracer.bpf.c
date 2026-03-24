@@ -76,7 +76,6 @@ SEC("uprobe/nrf_reg_args")
 int nrf_reg_args(struct pt_regs *ctx){
     struct event *e;
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-    e->dbg = bpf_ringbuf_reserve(&debug_args, sizeof(e->dbg), 0);
     if(!e){ return 0; }
 
     __builtin_memset(e, 0, sizeof(*e));
@@ -91,26 +90,26 @@ int nrf_reg_args(struct pt_regs *ctx){
     __builtin_memcpy(e->api, "NFRegister", 15);
     __builtin_memcpy(e->func, "NFRegisterProcedure", 20);
 
-    e->dbg.arg4 = PT_REGS_PARM4(ctx);
+    e->arg4 = PT_REGS_PARM4(ctx);
     __u64 hdr[8] = {};
-    if (e->dbg.arg4) {
-        bpf_probe_read_user(hdr, sizeof(hdr), (void *)e->dbg.arg4);
+    if (e->arg4) {
+        bpf_probe_read_user(hdr, sizeof(hdr), (void *)e->arg4);
 
-        e->dbg.p1 = hdr[0];
-        e->dbg.l1 = hdr[1];
-        e->dbg.p3 = hdr[4];
-        e->dbg.l3 = hdr[5];
-        e->dbg.p4 = hdr[6];
-        e->dbg.l4 = hdr[7];
+        e->p1 = hdr[0];
+        e->l1 = hdr[1];
+        e->p3 = hdr[4];
+        e->l3 = hdr[5];
+        e->p4 = hdr[6];
+        e->l4 = hdr[7];
 
-        if (e->dbg.p1 && e->dbg.l1 > 0 && e->dbg.l1 < sizeof(e->dbg.s1))
-            bpf_probe_read_user(e->dbg.s1, e->dbg.l1, (void *)e->dbg.p1);
+        if (e->p1 && e->l1 > 0 && e->l1 < sizeof(e->s1))
+            bpf_probe_read_user(e->s1, e->l1, (void *)e->p1);
 
-        if (e->dbg.p3 && e->dbg.l3 > 0 && e->dbg.l3 < sizeof(e->dbg.s3))
-            bpf_probe_read_user(e->dbg.s3, e->dbg.l3, (void *)e->dbg.p3);
+        if (e->p3 && e->l3 > 0 && e->l3 < sizeof(e->s3))
+            bpf_probe_read_user(e->s3, e->l3, (void *)e->p3);
 
-        if (e->dbg.p4 && e->dbg.l4 > 0 && e->dbg.l4 < sizeof(e->dbg.s4))
-            bpf_probe_read_user(e->dbg.s4, e->dbg.l4, (void *)e->dbg.p4);
+        if (e->p4 && e->l4 > 0 && e->l4 < sizeof(e->s4))
+            bpf_probe_read_user(e->s4, e->l4, (void *)e->p4);
     }
 
     bpf_ringbuf_submit(e, 0);
@@ -119,7 +118,7 @@ int nrf_reg_args(struct pt_regs *ctx){
 
 // /* Intercept Access Token Verif */
 // SEC("uprobe/nrf_access")
-// int nrf_ac_args(struct nrf_tracer.bpf
+// int nrf_ac_args(struct 
 // {
 //     /* data */
 // };

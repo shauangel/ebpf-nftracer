@@ -34,9 +34,9 @@ static int handle_args(void *ctx, void *data, size_t data_sz)
 {
     const struct event *e = data;
     printf("[%s: %s] pid=%u tid=%u",e->nf, e->api, e->pid, e->tid);
-    printf("p1=%llx l1=%llu s1=%s\n", e->dbg.p1, e->dbg.l1, e->dbg.s1);
-    printf("p3=%llx l3=%llu s3=%s\n", e->dbg.p3, e->dbg.l3, e->dbg.s3);
-    printf("p4=%llx l4=%llu s4=%s\n", e->dbg.p4, e->dbg.l4, e->dbg.s4);
+    printf("p1=%llx l1=%llu s1=%s\n", e->p1, e->l1, e->s1);
+    printf("p3=%llx l3=%llu s3=%s\n", e->p3, e->l3, e->s3);
+    printf("p4=%llx l4=%llu s4=%s\n", e->p4, e->l4, e->s4);
     return 0;
 }
 
