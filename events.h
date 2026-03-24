@@ -26,21 +26,21 @@ struct event {
     __u32 pid;               // process id
     __u32 tid;               // thread id
     __u64 cid;               // cgroup id
-    char func[64];           // the function that triggered
+    // char func[64];           // the function that triggered
 
     // Application (L7)
     char nf[8];              // the running NF
     char api[32];            // the name of api
-    char method[8];          // type of request
-    __u8 direction;          // Entry or Exit
-    int ret;                 // return value or HTTP status
+    // char method[8];          // type of request
+    // __u8 direction;          // Entry or Exit
+    // int ret;                 // return value or HTTP status
 
 
     // Network Level (L3-L4)
-    __u32 src_ip;
-    __u32 dest_ip;
-    __u16 src_port;
-    __u16 dest_port;
+    // __u32 src_ip;
+    // __u32 dest_ip;
+    // __u16 src_port;
+    // __u16 dest_port;
 
     // Auth
     char auth_id[32];

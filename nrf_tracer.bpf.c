@@ -80,15 +80,11 @@ int nrf_reg_args(struct pt_regs *ctx){
 
     __builtin_memset(e, 0, sizeof(*e));
 
-    __u64 pid_tgid = bpf_get_current_pid_tgid();
-    e->ts  = bpf_ktime_get_ns();
-    e->pid = pid_tgid >> 32;
-    e->tid = (__u32)pid_tgid;
-    e->cid = bpf_get_current_cgroup_id();
+    fill_process_context(e);
 
     __builtin_memcpy(e->nf, "NRF", 4);
     __builtin_memcpy(e->api, "NFRegister", 15);
-    __builtin_memcpy(e->func, "NFRegisterProcedure", 20);
+    // __builtin_memcpy(e->func, "NFRegisterProcedure", 20);
 
     e->arg4 = PT_REGS_PARM4(ctx);
     __u64 hdr[8] = {};
