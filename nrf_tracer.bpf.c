@@ -53,20 +53,20 @@ int nrf_registry_entry(struct pt_regs *ctx){
 }
 
 
-// SEC("uretprobe/nrf_registry_exit")
-// int nrf_registry_exit(struct pt_regs *ctx){
-//     struct event *e;
-//     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-//     if(!e){ return 0; }
+SEC("uprobe/nrf_api_exit")
+int nrf_api_exit(struct pt_regs *ctx){
+    struct event *e;
+    e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if(!e){ return 0; }
 
-//     __builtin_memset(e, 0, sizeof(*e));
-//     fill_process_context(e);
-//     fill_app_context(e, "NRF", "HandleNFRegister");
-//     __builtin_memcpy(e->api, "NFRegister", sizeof("NFRegister"));
-//     __builtin_memcpy(e->method, "POST", sizeof("POST"));
-//     e->direction = OUT;
-//     e->ret = 0;
+    __builtin_memset(e, 0, sizeof(*e));
+    fill_process_context(e);
+    fill_app_context(e, "NRF", "GinWriteResponse");
+    __builtin_memcpy(e->api, "WriteResponse", sizeof("WriteResponse"));
+    // __builtin_memcpy(e->method, "", sizeof(""));
+    e->direction = OUT;
+    e->ret = 0;
 
-//     bpf_ringbuf_submit(e, 0);
-//     return 0;
-// }
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}

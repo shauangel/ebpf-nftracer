@@ -52,9 +52,9 @@ int main(int argc, char **argv){
         .retprobe = false,
         .func_name = "github.com/free5gc/nrf/internal/sbi.(*Server).HTTPRegisterNFInstance");
 
-    // LIBBPF_OPTS(bpf_uprobe_opts, opts_register_exit, 
-    //     .retprobe = true,
-    //     .func_name = "github.com/free5gc/nrf/internal/sbi.(*Server).HTTPRegisterNFInstance");
+    LIBBPF_OPTS(bpf_uprobe_opts, opts_api_exit, 
+        .retprobe = false,
+        .func_name = "github.com/gin-gonic/gin.(*responseWriter).WriteHeader");
 
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -74,13 +74,13 @@ int main(int argc, char **argv){
         &opts_register_entry
     );
 
-    // skel->links.nrf_registry_exit = bpf_program__attach_uprobe_opts(
-    //     skel->progs.nrf_registry_exit,
-    //     pid,
-    //     exe_path,
-    //     0,
-    //     &opts_register_exit
-    // );
+    skel->links.nrf_api_exit = bpf_program__attach_uprobe_opts(
+        skel->progs.nrf_api_exit,
+        pid,
+        exe_path,
+        0,
+        &opts_api_exit
+    );
 
 
 
