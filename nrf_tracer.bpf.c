@@ -76,6 +76,7 @@ SEC("uprobe/nrf_reg_args")
 int nrf_reg_args(struct pt_regs *ctx){
     struct event *e;
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    e->dbg = bpf_ringbuf_reserve(&debug_args, sizeof(e->dbg), 0);
     if(!e){ return 0; }
 
     __builtin_memset(e, 0, sizeof(*e));
