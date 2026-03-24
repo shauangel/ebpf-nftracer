@@ -47,6 +47,9 @@ struct event {
     char scope[32];
 
     // Args
+    __u64 arg1;
+    __u64 arg2;
+    __u64 arg3;
     __u64 arg4;
     char s1[40];
     char s3[8];

@@ -12,31 +12,21 @@ static volatile sig_atomic_t stop;
 static void handle_signal(int sig){ stop = 1; }
 
 /* showing event logs */
-// static int handle_event(void *ctx, void *data, size_t data_sz)
+// static int handle_args(void *ctx, void *data, size_t data_sz)
 // {
 //     const struct event *e = data;
-
-//     printf("[%llu] NF=%s func=%s pid=%u tid=%u cid=%llu api=%s method=%s dir=%u ret=%d\n",
-//            e->ts,
-//            e->nf,
-//            e->func,
-//            e->pid,
-//            e->tid,
-//            e->cid,
-//            e->api,
-//            e->method,
-//            e->direction,
-//            e->ret);
+//     printf("[%s: %s] pid=%u tid=%u\n",e->nf, e->api, e->pid, e->tid);
+//     printf("p1=%llx l1=%llu s1=%s\n", e->p1, e->l1, e->s1);
+//     printf("p3=%llx l3=%llu s3=%s\n", e->p3, e->l3, e->s3);
+//     printf("p4=%llx l4=%llu s4=%s\n", e->p4, e->l4, e->s4);
 //     return 0;
 // }
 
-static int handle_args(void *ctx, void *data, size_t data_sz)
+static int handle_tok(void *ctx, void *data, size_t data_sz)
 {
     const struct event *e = data;
-    printf("[%s: %s] pid=%u tid=%u",e->nf, e->api, e->pid, e->tid);
-    printf("p1=%llx l1=%llu s1=%s\n", e->p1, e->l1, e->s1);
-    printf("p3=%llx l3=%llu s3=%s\n", e->p3, e->l3, e->s3);
-    printf("p4=%llx l4=%llu s4=%s\n", e->p4, e->l4, e->s4);
+    printf("[%s: %s] pid=%u tid=%u\n",e->nf, e->api, e->pid, e->tid);
+    printf("arg1=%llx arg2=%llx arg3=%llx arg4=%llx\n", e->arg1, e->arg2, e->arg3, e->arg4)
     return 0;
 }
 
@@ -59,18 +49,15 @@ int main(int argc, char **argv){
 
 
     /* Libbpf Option Initialization Macro */
-    // LIBBPF_OPTS(bpf_uprobe_opts, opts_register_entry, 
+    // LIBBPF_OPTS(bpf_uprobe_opts, opts_reg_args, 
     //     .retprobe = false,
-    //     .func_name = "github.com/free5gc/nrf/internal/sbi.(*Server).HTTPRegisterNFInstance");
+    //     .func_name = "github.com/free5gc/nrf/internal/sbi/processor.(*Processor).NFRegisterProcedure");
+    
 
-    LIBBPF_OPTS(bpf_uprobe_opts, opts_reg_args, 
+    LIBBPF_OPTS(bpf_uprobe_opts, opts_ac_args, 
         .retprobe = false,
-        .func_name = "github.com/free5gc/nrf/internal/sbi/processor.(*Processor).NFRegisterProcedure");
-
-    // LIBBPF_OPTS(bpf_uprobe_opts, opts_api_exit, 
-    //     .retprobe = false,
-    //     .func_name = "github.com/gin-gonic/gin.(*responseWriter).WriteHeader");
-
+        .func_name = "github.com/free5gc/nrf/internal/sbi/processor.(*Processor).AccessTokenProcedure");
+    
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
 
@@ -81,33 +68,23 @@ int main(int argc, char **argv){
         return 1;
     }
 
-    // skel->links.nrf_registry_entry = bpf_program__attach_uprobe_opts(
-    //     skel->progs.nrf_registry_entry,
+    // skel->links.nrf_reg_args = bpf_program__attach_uprobe_opts(
+    //     skel->progs.nrf_reg_args,
     //     pid,
     //     exe_path,
     //     0,
-    //     &opts_register_entry
+    //     &opts_reg_args
     // );
 
-    // skel->links.nrf_api_exit = bpf_program__attach_uprobe_opts(
-    //     skel->progs.nrf_api_exit,
-    //     pid,
-    //     exe_path,
-    //     0,
-    //     &opts_api_exit
-    // );
-
-    skel->links.nrf_reg_args = bpf_program__attach_uprobe_opts(
-        skel->progs.nrf_reg_args,
+    skel->links.nrf_ac_args = bpf_program__attach_uprobe_opts(
+        skel->progs.nrf_ac_args,
         pid,
         exe_path,
         0,
-        &opts_reg_args
+        &opts_ac_args
     );
 
-
-
-    rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_args, NULL, NULL);
+    rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_tok, NULL, NULL);
     if (!rb) {
         fprintf(stderr, "failed to create ring buffer\n");
         nrf_tracer_bpf__destroy(skel);

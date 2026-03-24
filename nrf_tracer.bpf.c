@@ -34,44 +34,8 @@ static __always_inline void fill_app_context(struct event *e, const char *nf_nam
 
 /* API Interception */
 /* -------------- TO-DO (Need to find the real function names) -------------- */
-// SEC("uprobe/nrf_registry_entry")
-// int nrf_registry_entry(struct pt_regs *ctx){
-//     struct event *e;
-//     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-//     if(!e){ return 0; }
 
-//     __builtin_memset(e, 0, sizeof(*e));
-//     fill_process_context(e);
-//     fill_app_context(e, "NRF", "HandleNFRegister");
-//     __builtin_memcpy(e->api, "NFRegister", sizeof("NFRegister"));
-//     __builtin_memcpy(e->method, "POST", sizeof("POST"));
-//     e->direction = IN;
-//     e->ret = -1;
-
-//     bpf_ringbuf_submit(e, 0);
-//     return 0;
-// }
-
-
-// SEC("uprobe/nrf_api_exit")
-// int nrf_api_exit(struct pt_regs *ctx){
-//     struct event *e;
-//     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
-//     if(!e){ return 0; }
-
-//     __builtin_memset(e, 0, sizeof(*e));
-//     fill_process_context(e);
-//     fill_app_context(e, "NRF", "GinWriteResponse");
-//     __builtin_memcpy(e->api, "WriteResponse", sizeof("WriteResponse"));
-//     // __builtin_memcpy(e->method, "", sizeof(""));
-//     e->direction = OUT;
-//     e->ret = 0;
-
-//     bpf_ringbuf_submit(e, 0);
-//     return 0;
-// }
-
-/* Intercept Register API*/
+/* Register API*/
 SEC("uprobe/nrf_reg_args")
 int nrf_reg_args(struct pt_regs *ctx){
     struct event *e;
@@ -112,10 +76,23 @@ int nrf_reg_args(struct pt_regs *ctx){
     return 0;
 }
 
-// /* Intercept Access Token Verif */
-// SEC("uprobe/nrf_access")
-// int nrf_ac_args(struct 
-// {
-//     /* data */
-// };
-// )
+/* Access Token Verif */
+SEC("uprobe/nrf_ac_args")
+int nrf_ac_args(struct pt_regs *ctx){
+    struct event *e;
+    e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if(!e){ return 0; }
+
+    __builtin_memset(e, 0, sizeof(*e));
+    fill_process_context(e);
+    __builtin_memcpy(e->nf, "NRF", 4);
+    __builtin_memcpy(e->api, "AccessToken", 15);
+
+    e->arg1 = PT_REGS_PARM1(ctx);
+    e->arg2 = PT_REGS_PARM2(ctx);
+    e->arg3 = PT_REGS_PARM3(ctx);
+    e->arg4 = PT_REGS_PARM4(ctx);
+
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+};
