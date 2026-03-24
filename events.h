@@ -22,7 +22,7 @@ struct debug_args {
     char buf0[64], buf1[64], buf3[64], buf4[64];
     __u64 p1, p2, p3, p4;
     __u64 l1, l2, l3, l4;
-}
+};
 
 /* Event Schema (connection, api) */
 struct event {
