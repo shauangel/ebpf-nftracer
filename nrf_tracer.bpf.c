@@ -127,4 +127,6 @@ int handle_ac_req(struct pt_regs *ctx){
     if (e->dbg.arg4)
         bpf_probe_read_user(e->dbg.q, sizeof(e->dbg.q), (void *)e->dbg.arg4);
 
+    bpf_ringbuf_submit(e, 0);
+    return 0;
 }
