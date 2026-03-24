@@ -93,7 +93,7 @@ int nrf_reg_args(struct pt_regs *ctx){
     e->dbg.arg4 = PT_REGS_PARM4(ctx);
     __u64 hdr[8] = {};
     if (e->dbg.arg4) {
-        bpf_probe_read_user(hdr, sizeof(hdr), (void *)e->arg4);
+        bpf_probe_read_user(hdr, sizeof(hdr), (void *)e->dbg.arg4);
 
         e->dbg.p1 = hdr[0];
         e->dbg.l1 = hdr[1];
