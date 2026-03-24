@@ -28,7 +28,7 @@ static int handle_tok(void *ctx, void *data, size_t data_sz)
     printf("[%s: %s] pid=%u tid=%u\n",e->nf, e->api, e->pid, e->tid);
     printf("arg1=%llx arg2=%llx arg3=%llx arg4=%llx\n", e->arg1, e->arg2, e->arg3, e->arg4);
 
-    for(i=0; i<64; i++){
+    for(int i=0; i<64; i++){
         printf("%02x ", (unsigned char)e->probe_test[i]);
     }
     printf("\n");
