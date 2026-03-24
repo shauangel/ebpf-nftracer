@@ -98,8 +98,8 @@ int nrf_ac_args(struct pt_regs *ctx){
         if(e->dbg.q[4] && e->dbg.q[5] > 0 && e->dbg.q[5] < sizeof(e->dbg.buf0))
             bpf_probe_read_user(e->dbg.buf0, e->dbg.q[5], (void *)e->dbg.q[4]);
 
-        if(e->dbg.q[6] && e->dbg.q[7] > 0 && e->dbg.q[6] < sizeof(e->dbg.buf1))
-            bpf_probe_read_user(e->dbg.buf1, e->dbg.q[6], (void *)e->dbg.q[5]);
+        if(e->dbg.q[6] && e->dbg.q[7] > 0 && e->dbg.q[7] < sizeof(e->dbg.buf1))
+            bpf_probe_read_user(e->dbg.buf1, e->dbg.q[7], (void *)e->dbg.q[6]);
 
         if(e->dbg.q[8] && e->dbg.q[9] > 0 && e->dbg.q[9] < sizeof(e->dbg.buf2))
             bpf_probe_read_user(e->dbg.buf2, e->dbg.q[9], (void *)e->dbg.q[8]);
