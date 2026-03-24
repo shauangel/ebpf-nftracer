@@ -56,16 +56,15 @@ int nrf_reg_args(struct pt_regs *ctx){
     if (e->dbg.arg4) {
         bpf_probe_read_user(e->dbg.q, sizeof(e->dbg.q), (void *)e->dbg.arg4);
 
+        // NFInstanceID
         if (e->dbg.q[0] && e->dbg.q[1] > 0 && e->dbg.q[1] < sizeof(e->dbg.buf0))
             bpf_probe_read_user(e->dbg.buf0, e->dbg.q[1], (void *)e->dbg.q[0]);
-
-        if(e->dbg.q[2] && e->dbg.q[3] > 0 && e->dbg.q[3] < sizeof(e->dbg.buf1))
-            bpf_probe_read_user(e->dbg.buf1, e->dbg.q[3], (void *)e->dbg.q[2]);
-
+        
+        // Requested NF
         if(e->dbg.q[4] && e->dbg.q[5] > 0 && e->dbg.q[5] < sizeof(e->dbg.buf2))
             bpf_probe_read_user(e->dbg.buf2, e->dbg.q[5], (void *)e->dbg.q[4]);
 
-        // 
+        // Status
         if(e->dbg.q[6] && e->dbg.q[7] > 0 && e->dbg.q[7] < sizeof(e->dbg.buf3))
             bpf_probe_read_user(e->dbg.buf3, e->dbg.q[7], (void *)e->dbg.q[6]);
     }
@@ -74,7 +73,7 @@ int nrf_reg_args(struct pt_regs *ctx){
     return 0;
 }
 
-/* Access Token Verif */
+/* Access Token Request */
 SEC("uprobe/nrf_ac_args")
 int nrf_ac_args(struct pt_regs *ctx){
     struct event *e;
@@ -111,4 +110,21 @@ int nrf_ac_args(struct pt_regs *ctx){
 
     bpf_ringbuf_submit(e, 0);
     return 0;
-};
+}
+
+SEC("uprobe/handle_ac_req")
+int handle_ac_req(struct pt_regs *ctx){
+    struct event *e;
+    e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if(!e){ return 0; }
+
+    __builtin_memset(e, 0, sizeof(*e));
+    fill_process_context(e);
+    __builtin_memcpy(e->nf, "NRF", 4);
+    __builtin_memcpy(e->api, "HandleAccessRequest", 32);
+
+    e->dbg.arg4 = PT_REGS_PARM4(ctx);
+    if (e->dbg.arg4)
+        bpf_probe_read_user(e->dbg.q, sizeof(e->dbg.q), (void *)e->dbg.arg4);
+
+}

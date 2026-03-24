@@ -26,35 +26,25 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
 {
     const struct event *e = data;
     printf("[%s: %s] pid=%u tid=%u\n",e->nf, e->api, e->pid, e->tid);
-    // for(int i=0; i<16; i++){
-    //     printf("%llx ", e->dbg.q[i]);
-    // }
-    // printf("\n");
+    
+    printf("Arg hex: \n")
+    for(int i=0; i<16; i++){
+        printf("%llx ", e->dbg.q[i]);
+    }
+    printf("\n");
+
     printf("paramA: %s\n", e->dbg.buf0);
     printf("paramB: %s\n", e->dbg.buf1);
     printf("paramC: %s\n", e->dbg.buf2);
     printf("paramD: %s\n", e->dbg.buf3);
     printf("paramE: %s\n", e->dbg.buf4);
 
-    // printf("arg1=%llx arg2=%llx arg3=%llx arg4=%llx\n", e->arg1, e->arg2, e->arg3, e->arg4);
     // printf("arg4: \n");
     // for(int i=0; i<64; i++){
     //     printf("%02x ", (unsigned char)e->probe_test[i]);
     // }
     // printf("\n");
 
-    // printf("arg2-q0: \n");
-    // for(int i=0; i<64; i++){
-    //     printf("%02x ", (unsigned char)e->buf0[i]);
-    // }
-    // printf("\n");
-
-
-    // printf("arg2-q1: \n");
-    // for(int i=0; i<64; i++){
-    //     printf("%02x ", (unsigned char)e->buf1[i]);
-    // }
-    // printf("\n");
     return 0;
 }
 
@@ -73,8 +63,6 @@ int main(int argc, char **argv){
         fprintf(stderr, "failed to find nrf executable\n");
         return 1;
     }
-    // printf("NRF pid=%d exe=%s\n", pid, exe_path);
-
 
     /* Libbpf Option Initialization Macro */
     LIBBPF_OPTS(bpf_uprobe_opts, opts_reg_args, 
@@ -85,6 +73,10 @@ int main(int argc, char **argv){
     LIBBPF_OPTS(bpf_uprobe_opts, opts_ac_args, 
         .retprobe = false,
         .func_name = "github.com/free5gc/nrf/internal/sbi/processor.(*Processor).AccessTokenProcedure");
+    
+    LIBBPF_OPTS(bpf_uprobe_opts, opts_handle_ac_req, 
+        .retprobe = false,
+        .func_name = "github.com/free5gc/nrf/internal/sbi/processor.(*Processor).HandleAccessTokenRequest");
     
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -110,6 +102,14 @@ int main(int argc, char **argv){
         exe_path,
         0,
         &opts_ac_args
+    );
+
+    skel->links.handle_ac_req = bpf_program__attach_uprobe_opts(
+        skel->progs.handle_ac_req,
+        pid,
+        exe_path,
+        0,
+        &opts_handle_ac_req
     );
 
     rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_event, NULL, NULL);
