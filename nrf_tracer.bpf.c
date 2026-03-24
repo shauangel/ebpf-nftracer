@@ -27,7 +27,7 @@ static __always_inline void fill_process_context(struct event *e)
 // Application Context
 static __always_inline void fill_app_context(struct event *e, const char *nf_name, const char *func_name)
 {
-    bpf_probe_read_kernel_str(e->func, sizeof(e->func), func_name);
+    // bpf_probe_read_kernel_str(e->func, sizeof(e->func), func_name);
     bpf_probe_read_kernel_str(e->nf, sizeof(e->nf), nf_name);
 }
 
