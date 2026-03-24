@@ -19,7 +19,7 @@ enum direction_type {
 struct debug_args {
     __u64 arg1, arg2, arg3, arg4;
     __u64 q[16];
-    char buf0[32], buf1[32], buf2[32], buf3[32], buf4[32];
+    char buf0[64], buf1[64], buf2[64], buf3[64], buf4[64];
 };
 
 /* Event Schema (connection, api) */
