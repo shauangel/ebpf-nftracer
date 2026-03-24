@@ -27,7 +27,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
     const struct event *e = data;
     printf("[%s: %s] pid=%u tid=%u\n",e->nf, e->api, e->pid, e->tid);
     
-    printf("Arg hex: \n")
+    printf("Arg hex: \n");
     for(int i=0; i<16; i++){
         printf("%llx ", e->dbg.q[i]);
     }
