@@ -93,7 +93,7 @@ int nrf_ac_args(struct pt_regs *ctx){
     // e->arg3 = PT_REGS_PARM3(ctx);
     e->dbg.arg4 = PT_REGS_PARM4(ctx);
     if (e->dbg.arg4)
-        bpf_probe_read_user(e->dbg.q, sizeof(e->dbg.q), (void *)e->arg4);
+        bpf_probe_read_user(e->dbg.q, sizeof(e->dbg.q), (void *)e->dbg.arg4);
     bpf_ringbuf_submit(e, 0);
     return 0;
 };
