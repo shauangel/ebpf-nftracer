@@ -10,14 +10,15 @@ BPF_CFLAGS := -O2 -g -target bpf \
 
 LIBS := -lbpf -lelf -lz
 
-TARGET = nrf_loader
-BPF_OBJ = nrf_tracer.bpf.o
-SKEL = nrf_tracer.skel.h
+NF = amf
+TARGET = $(NF)_loader
+BPF_OBJ = $(NF)_tracer.bpf.o
+SKEL = $(NF)_tracer.skel.h
 
 all: $(TARGET)
 
 # 1. compile eBPF program
-$(BPF_OBJ): nrf_tracer.bpf.c events.h
+$(BPF_OBJ): $(NF)_tracer.bpf.c events.h
 	$(CLANG) $(BPF_CFLAGS) $(INCLUDES) -c $< -o $@
 
 # 2. generate skeleton
@@ -25,7 +26,7 @@ $(SKEL): $(BPF_OBJ)
 	$(BPFTOOL) gen skeleton $< > $@
 
 # 3. compile user space
-$(TARGET): nrf_loader.c common.c $(SKEL)
-	$(CLANG) $(CFLAGS) -D__USER_SPACE__ nrf_loader.c common.c -o $@ $(LIBS)
+$(TARGET): $(NF)_loader.c common.c $(SKEL)
+	$(CLANG) $(CFLAGS) -D__USER_SPACE__ $(NF)_loader.c common.c -o $@ $(LIBS)
 clean:
 	rm -f $(TARGET) $(BPF_OBJ) $(SKEL)
