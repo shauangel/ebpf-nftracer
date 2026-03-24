@@ -121,15 +121,22 @@ int nrf_oauth_verif(struct pt_regs *ctx){
     __builtin_memset(e, 0, sizeof(*e));
     fill_process_context(e);
     __builtin_memcpy(e->nf, "NRF", 4);
-    __builtin_memcpy(e->api, "OAuthVerif", 32);
+    __builtin_memcpy(e->api, "OAuthVerif", 11);
 
     e->dbg.arg1 = PT_REGS_PARM1(ctx);
     e->dbg.arg2 = PT_REGS_PARM2(ctx);
     e->dbg.arg3 = PT_REGS_PARM3(ctx);
     e->dbg.arg4 = PT_REGS_PARM4(ctx);
-    if (e->dbg.arg4)
-        bpf_probe_read_user(e->dbg.q, sizeof(e->dbg.q), (void *)e->dbg.arg4);
+    if (e->dbg.arg2)
+        bpf_probe_read_user(e->dbg.buf2, sizeof(e->dbg.buf2), (void *)e->dbg.arg2);
 
+    if (e->dbg.arg3)
+        bpf_probe_read_user(e->dbg.buf3, sizeof(e->dbg.buf3), (void *)e->dbg.arg3);
+
+    if (e->dbg.arg4) {
+        bpf_probe_read_user(e->dbg.buf4, sizeof(e->dbg.buf4), (void *)e->dbg.arg4);
+        bpf_probe_read_user(e->dbg.q, sizeof(e->dbg.q), (void *)e->dbg.arg4);
+    }
     bpf_ringbuf_submit(e, 0);
     return 0;
 }
