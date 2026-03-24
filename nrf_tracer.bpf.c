@@ -116,10 +116,10 @@ int nrf_reg_args(struct pt_regs *ctx){
     return 0;
 }
 
-/* Intercept Access Token Verif */
-SEC("uprobe/nrf_access")
-int nrf_ac_args(struct nrf_tracer.bpf
-{
-    /* data */
-};
-)
+// /* Intercept Access Token Verif */
+// SEC("uprobe/nrf_access")
+// int nrf_ac_args(struct nrf_tracer.bpf
+// {
+//     /* data */
+// };
+// )
