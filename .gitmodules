@@ -1,0 +1,3 @@
+[submodule "mcap-chain"]
+	path = mcap-chain
+	url = https://github.com/shauangel/mcap-chain.git
