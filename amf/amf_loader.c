@@ -4,27 +4,19 @@
 #include <unistd.h>
 #include <bpf/libbpf.h>
 #include "amf_tracer.skel.h"
-#include "events.h"
-#include "common.h"
+#include "../events.h"
+#include "../common.h"
+#include "amf_functions.h"
 
 static volatile sig_atomic_t stop;
 
 static void handle_signal(int sig){ stop = 1; }
 
-/* showing event logs */
-static int handle_tok(void *ctx, void *data, size_t data_sz)
+/* Triggered event handler */
+static int handle_event(void *ctx, void *data, size_t data_sz)
 {
     const struct event *e = data;
-    printf("[%s: %s] pid=%u tid=%u\n",e->nf, e->api, e->pid, e->tid);
-    for(int i=0; i<16; i++){
-        printf("%llx ", e->dbg.q[i]);
-    }
-    printf("\n");
-    // printf("paramA: %s\n", e->dbg.buf0);
-    // printf("paramB: %s\n", e->dbg.buf1);
-    // printf("paramC: %s\n", e->dbg.buf2);
-    // printf("paramD: %s\n", e->dbg.buf3);
-    // printf("paramE: %s\n", e->dbg.buf4);
+    printf("%s: %s\n",e->nf, e->api);
     return 0;
 }
 
@@ -44,30 +36,36 @@ int main(int argc, char **argv){
         return 1;
     }
 
-    /* Libbpf Option Initialization Macro */
-    LIBBPF_OPTS(bpf_uprobe_opts, opts_ac_req, 
-        .retprobe = false,
-        .func_name = "github.com/free5gc/openapi/nrf/AccessToken.(*AccessTokenRequestApiService).AccessTokenRequest");
-    
-    signal(SIGINT, handle_signal);
-    signal(SIGTERM, handle_signal);
-
-    /* Load BPF skeleton & link macro */
+    // Load skeleton
     skel = amf_tracer_bpf__open_and_load();
     if (!skel) {
         fprintf(stderr, "failed to open and load skeleton\n");
         return 1;
     }
 
-    skel->links.amf_ac_req = bpf_program__attach_uprobe_opts(
-        skel->progs.amf_ac_req,
-        pid,
-        exe_path,
-        0,
-        &opts_ac_req
-    );
+    // Use amf_comm function to attach multiple probes
+    // Attach Subscription API probes
+    attach_programs(skel, exe_path, pid, sub_funcs, sub_funcs_cnt);
+    
+    /* -------------- TODO -------------- */
+    // Attach UE-Context API probes
 
-    rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_tok, NULL, NULL);
+    /* -------------- TODO -------------- */
+    // Attach Callback API probes
+
+    /* -------------- TODO -------------- */
+    // Attach Event Exposure API probes
+
+    /* -------------- TODO -------------- */
+    // Attach N1N2 Message API probes
+
+    /* -------------- TODO -------------- */
+    // Attach Other API probes
+
+    signal(SIGINT, handle_signal);
+    signal(SIGTERM, handle_signal);
+
+    rb = ring_buffer__new(bpf_map__fd(skel->maps.events), handle_event, NULL, NULL);
     if (!rb) {
         fprintf(stderr, "failed to create ring buffer\n");
         amf_tracer_bpf__destroy(skel);
@@ -83,6 +81,7 @@ int main(int argc, char **argv){
     }
 
     ring_buffer__free(rb);
+    detach_programs(sub_funcs, sub_funcs_cnt);
     amf_tracer_bpf__destroy(skel);
     return 0;
 }
