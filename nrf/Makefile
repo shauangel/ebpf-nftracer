@@ -1,4 +1,4 @@
-NF              := amf
+NF              := nrf
 
 CLANG           := clang
 CC              := gcc
