@@ -47,9 +47,11 @@ int main(int argc, char **argv){
     // Attach NF_Management probes
     attach_programs(skel, exe_path, pid, nf_mngmt_funcs, nf_mngmt_funcs_cnt);
     
-    /* -------------- TODO -------------- */
     // Attach Auth2 probes
+    attach_programs(skel, exe_path, pid, auth_funcs, auth_funcs_cnt);
+
     // Attach NF_Discovery probes
+    attach_programs(skel, exe_path, pid, nf_disc_funcs, nf_disc_funcs_cnt);
 
 
     signal(SIGINT, handle_signal);
@@ -72,6 +74,8 @@ int main(int argc, char **argv){
 
     ring_buffer__free(rb);
     detach_programs(nf_mngmt_funcs, nf_mngmt_funcs_cnt);
+    detach_programs(auth_funcs, auth_funcs_cnt);
+    detach_programs(nf_disc_funcs, nf_disc_funcs_cnt);
     nrf_tracer_bpf__destroy(skel);
     return 0;
 }
