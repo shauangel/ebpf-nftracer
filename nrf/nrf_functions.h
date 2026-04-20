@@ -1,7 +1,7 @@
 #ifndef NRF_FUNCTIONS_H
 #define NRF_FUNCTIONS_H
 
-#include "../common.h"
+#include "common.h"
 
 extern struct attach_target auth_funcs[];
 extern struct attach_target nf_disc_funcs[];

@@ -2,7 +2,7 @@
 #define NRF_COMM_H
 
 #include <bpf/libbpf.h>
-#include "../common.h"
+#include "common.h"
 #include "nrf_tracer.skel.h"
 
 int attach_programs(struct nrf_tracer_bpf *skel,
