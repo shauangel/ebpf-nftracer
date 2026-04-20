@@ -43,10 +43,13 @@ int main(int argc, char **argv){
         return 1;
     }
 
-    /* -------------- TODO -------------- */
-    // Use nrf_comm function to attach multiple probes
-    // attach_programs(skel, exe_path, pid, sub_funcs, sub_funcs_cnt);
+    // Attach NF_Management probes
+    attach_programs(skel, exe_path, pid, nf_mngmt_funcs, nf_mngmt_funcs_cnt);
     
+    /* -------------- TODO -------------- */
+    // Attach Auth2 probes
+    // Attach NF_Discovery probes
+
 
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -67,7 +70,7 @@ int main(int argc, char **argv){
     }
 
     ring_buffer__free(rb);
-    detach_programs(sub_funcs, sub_funcs_cnt);
+    detach_programs(nf_mngmt_funcs, nf_mngmt_funcs_cnt);
     nrf_tracer_bpf__destroy(skel);
     return 0;
 }

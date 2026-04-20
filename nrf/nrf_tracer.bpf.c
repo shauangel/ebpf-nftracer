@@ -15,20 +15,26 @@ struct {
 
 
 /* -------------- TODO -------------- */
-/* Subscription */
-SEC("uprobe/amf_stat_ch_sub")
-int amf_stat_ch_sub(struct pt_regs *ctx){
+/* NF_Management */
+
+// NF Register probe
+SEC("uprobe/nrf_nf_register")
+int nrf_nf_register(struct pt_regs *ctx){
     struct event *e;
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if(!e){ return 0; }
 
     __builtin_memset(e, 0, sizeof(*e));
-    fill_process_context(e);
-    __builtin_memcpy(e->nf, "AMF", 4);
-    __builtin_memcpy(e->api, "AMFStatusChangeSubscribe", 24);
+    __builtin_memcpy(e->nf, "NRF", 4);
+    __builtin_memcpy(e->api, "NRFNFRegister", 13);
 
     bpf_ringbuf_submit(e, 0);
     return 0;
 }
 
 /* -------------- TODO -------------- */
+/* Authentication */
+
+
+/* -------------- TODO -------------- */
+/* NF_Discovery */
