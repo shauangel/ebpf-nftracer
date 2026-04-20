@@ -19,14 +19,17 @@ SKEL_HDR        := $(NF)_tracer.skel.h
 
 USER_SRCS       := $(NF)_loader.c $(NF)_comm.c $(NF)_functions.c
 USER_OBJS       := $(USER_SRCS:.c=.o)
+
+COMMON_OBJ      := ../common.o
+
 TARGET          := $(NF)_loader
 
 .PHONY: all clean
 
 all: $(TARGET)
 
-$(TARGET): $(SKEL_HDR) $(USER_OBJS)
-	$(CC) $(CFLAGS) $(USER_OBJS) -o $@ $(LIBS)
+$(TARGET): $(SKEL_HDR) $(USER_OBJS) $(COMMON_OBJ)
+	$(CC) $(CFLAGS) $(USER_OBJS) $(COMMON_OBJ) -o $@ $(LIBS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@

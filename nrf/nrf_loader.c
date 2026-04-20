@@ -7,6 +7,7 @@
 #include "events.h"
 #include "common.h"
 #include "nrf_functions.h"
+#include "nrf_comm.h"
 
 static volatile sig_atomic_t stop;
 
