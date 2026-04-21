@@ -14,10 +14,10 @@ struct {
 } events SEC(".maps");
 
 
-/* -------------- TODO -------------- */
-/* Subscription */
-SEC("uprobe/")
-int ausf(struct pt_regs *ctx){
+/* ------------- UE Authentication ------------- */
+// Authentication Aka Confirm Request
+SEC("uprobe/ausf_auth_aka_confirm")
+int ausf_auth_aka_confirm(struct pt_regs *ctx){
     struct event *e;
     e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if(!e){ return 0; }
@@ -25,10 +25,40 @@ int ausf(struct pt_regs *ctx){
     __builtin_memset(e, 0, sizeof(*e));
     fill_process_context(e);
     __builtin_memcpy(e->nf, "AUSF", 4);
-    __builtin_memcpy(e->api, "", 24);
+    __builtin_memcpy(e->api, "AUSFAuthAkaConfirm", 24);
 
     bpf_ringbuf_submit(e, 0);
     return 0;
 }
 
-/* -------------- TODO -------------- */
+// UE Authentication Post Request
+SEC("uprobe/ausf_ue_auth_post")
+int ausf_ue_auth_post(struct pt_regs *ctx){
+    struct event *e;
+    e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if(!e){ return 0; }
+
+    __builtin_memset(e, 0, sizeof(*e));
+    fill_process_context(e);
+    __builtin_memcpy(e->nf, "AUSF", 4);
+    __builtin_memcpy(e->api, "AUSFUEAuthPost", 24);
+
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+// EAP Authentication Confirm Request
+SEC("uprobe/ausf_eap_auth_confirm")
+int ausf_eap_auth_confirm(struct pt_regs *ctx){
+    struct event *e;
+    e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if(!e){ return 0; }
+
+    __builtin_memset(e, 0, sizeof(*e));
+    fill_process_context(e);
+    __builtin_memcpy(e->nf, "AUSF", 4);
+    __builtin_memcpy(e->api, "AUSFEAPAuthConfirm", 24);
+
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}

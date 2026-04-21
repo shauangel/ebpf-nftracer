@@ -43,9 +43,8 @@ int main(int argc, char **argv){
         return 1;
     }
 
-    /* -------------- TODO -------------- */
-    // Use ausf_comm function to attach multiple probes
-    // attach_programs(skel, exe_path, pid, sub_funcs, sub_funcs_cnt);
+    // Attach UE Authentication Probes
+    attach_programs(skel, exe_path, pid, ue_auth_funcs, ue_auth_funcs_cnt);
     
 
     signal(SIGINT, handle_signal);
@@ -67,6 +66,7 @@ int main(int argc, char **argv){
     }
 
     ring_buffer__free(rb);
+    detach_programs(ue_auth_funcs, ue_auth_funcs_cnt);
     ausf_tracer_bpf__destroy(skel);
     return 0;
 }
