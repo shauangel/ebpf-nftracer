@@ -43,24 +43,23 @@ int main(int argc, char **argv){
         return 1;
     }
 
-    // Use amf_comm function to attach multiple probes
     // Attach Subscription API probes
     attach_programs(skel, exe_path, pid, sub_funcs, sub_funcs_cnt);
     
-    /* -------------- TODO -------------- */
     // Attach UE-Context API probes
+    attach_programs(skel, exe_path, pid, ue_ctx_funcs, ue_ctx_funcs_cnt);
 
-    /* -------------- TODO -------------- */
     // Attach Callback API probes
+    attach_programs(skel, exe_path, pid, callback_funcs, callback_funcs_cnt);
 
-    /* -------------- TODO -------------- */
     // Attach Event Exposure API probes
+    attach_programs(skel, exe_path, pid, evnt_funcs, evnt_funcs_cnt);
 
-    /* -------------- TODO -------------- */
     // Attach N1N2 Message API probes
+    attach_programs(skel, exe_path, pid, n1n2msg_funcs, n1n2msg_funcs_cnt);
 
-    /* -------------- TODO -------------- */
     // Attach Other API probes
+    attach_programs(skel, exe_path, pid, other_funcs, other_funcs_cnt);
 
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -82,6 +81,11 @@ int main(int argc, char **argv){
 
     ring_buffer__free(rb);
     detach_programs(sub_funcs, sub_funcs_cnt);
+    detach_programs(ue_ctx_funcs, ue_ctx_funcs_cnt);
+    detach_programs(callback_funcs, callback_funcs_cnt);
+    detach_programs(evnt_funcs, evnt_funcs_cnt);
+    detach_programs(n1n2msg_funcs, n1n2msg_funcs_cnt);
+    detach_programs(other_funcs, other_funcs_cnt);
     amf_tracer_bpf__destroy(skel);
     return 0;
 }

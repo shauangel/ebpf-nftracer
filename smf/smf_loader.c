@@ -43,10 +43,23 @@ int main(int argc, char **argv){
         return 1;
     }
 
-    /* -------------- TODO -------------- */
-    // Use smf_comm function to attach multiple probes
-    // attach_programs(skel, exe_path, pid, sub_funcs, sub_funcs_cnt);
+    // Attach Association API probes
+    attach_programs(skel, exe_path, pid, association_funcs, association_funcs_cnt);
     
+    // Attach Charging Trigger API probes
+    attach_programs(skel, exe_path, pid, charging_trigger_funcs, charging_trigger_funcs_cnt);
+
+    // Attach Datapath API probes
+    attach_programs(skel, exe_path, pid, datapath_funcs, datapath_funcs_cnt);
+
+    // Attach OAM API probes
+    attach_programs(skel, exe_path, pid, oam_funcs, oam_funcs_cnt);
+
+    // Attach PDU Session API probes
+    attach_programs(skel, exe_path, pid, pdu_session_funcs, pdu_session_funcs_cnt);
+
+    // Attach ULCL API probes
+    attach_programs(skel, exe_path, pid, ulcl_funcs, ulcl_funcs_cnt);
 
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -67,6 +80,12 @@ int main(int argc, char **argv){
     }
 
     ring_buffer__free(rb);
+    detach_programs(association_funcs, association_funcs_cnt);
+    detach_programs(charging_trigger_funcs, charging_trigger_funcs_cnt);
+    detach_programs(datapath_funcs, datapath_funcs_cnt);
+    detach_programs(oam_funcs, oam_funcs_cnt);
+    detach_programs(pdu_session_funcs, pdu_session_funcs_cnt);
+    detach_programs(ulcl_funcs, ulcl_funcs_cnt);
     smf_tracer_bpf__destroy(skel);
     return 0;
 }
