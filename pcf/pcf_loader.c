@@ -42,11 +42,21 @@ int main(int argc, char **argv){
         fprintf(stderr, "failed to open and load skeleton\n");
         return 1;
     }
-
-    /* -------------- TODO -------------- */
-    // Use pcf_comm function to attach multiple probes
-    // attach_programs(skel, exe_path, pid, sub_funcs, sub_funcs_cnt);
     
+    // Attach AM Policy Functions
+    attach_programs(skel, exe_path, pid, am_policy_funcs, am_policy_funcs_cnt);
+    
+    // Attach BDT Policy Functions
+    attach_programs(skel, exe_path, pid, bdt_policy_funcs, bdt_policy_funcs_cnt);
+
+    // Attach OAM Functions
+    attach_programs(skel, exe_path, pid, oam_funcs, oam_funcs_cnt); 
+
+    // Attach Policy Authorization Functions
+    attach_programs(skel, exe_path, pid, policy_auth_funcs, policy_auth_funcs_cnt);
+
+    // SM Policy Functions
+    attach_programs(skel, exe_path, pid, sm_policy_funcs, sm_policy_funcs_cnt);
 
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -67,6 +77,11 @@ int main(int argc, char **argv){
     }
 
     ring_buffer__free(rb);
+    detach_programs(sm_policy_funcs, sm_policy_funcs_cnt);
+    detach_programs(policy_auth_funcs, policy_auth_funcs_cnt);
+    detach_programs(oam_funcs, oam_funcs_cnt);
+    detach_programs(bdt_policy_funcs, bdt_policy_funcs_cnt);
+    detach_programs(am_policy_funcs, am_policy_funcs_cnt);
     pcf_tracer_bpf__destroy(skel);
     return 0;
 }
