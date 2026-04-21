@@ -43,10 +43,20 @@ int main(int argc, char **argv){
         return 1;
     }
 
-    /* -------------- TODO -------------- */
-    // Use udm_comm function to attach multiple probes
-    // attach_programs(skel, exe_path, pid, sub_funcs, sub_funcs_cnt);
+    // Attach Event Exposure Functions
+    attach_programs(skel, exe_path, pid, evnt_exp_funcs, evnt_exp_funcs_cnt);
     
+    // Attach Generate Authentication Data Functions
+    attach_programs(skel, exe_path, pid, gen_auth_funcs, gen_auth_funcs_cnt);
+
+    // Attach Parameter Provision Functions
+    attach_programs(skel, exe_path, pid, param_prov_funcs, param_prov_funcs_cnt);
+
+    // Attach Subscriber Data Management Functions
+    attach_programs(skel, exe_path, pid, subscriber_funcs, subscriber_funcs_cnt);
+
+    // Attach UE Context Management Functions
+    attach_programs(skel, exe_path, pid, ue_ctx_mngmt_funcs, ue_ctx_mngmt_funcs_cnt);
 
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -67,6 +77,11 @@ int main(int argc, char **argv){
     }
 
     ring_buffer__free(rb);
+    detach_programs(skel, evnt_exp_funcs, evnt_exp_funcs_cnt);
+    detach_programs(skel, gen_auth_funcs, gen_auth_funcs_cnt);
+    detach_programs(skel, param_prov_funcs, param_prov_funcs_cnt);
+    detach_programs(skel, subscriber_funcs, subscriber_funcs_cnt);
+    detach_programs(skel, ue_ctx_mngmt_funcs, ue_ctx_mngmt
     udm_tracer_bpf__destroy(skel);
     return 0;
 }
