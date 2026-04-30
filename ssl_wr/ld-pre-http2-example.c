@@ -56,29 +56,14 @@ int SSL_write(SSL *ssl, const void *buf, int num)
                 "[HOOK] h2 frame? len=%u type=0x%02x flags=0x%02x stream=%u\n",
                 len, type, flags, stream_id);
 
-        if (type == 0x01 && stream_id != 0) {
-            /*
-              Experimental HPACK literal header field:
-              This is NOT a complete/correct HPACK implementation.
-              It tries to append a raw-ish literal header block.
-
-              Header:
-                x-nf-signature: test-signature
-
-              Encoding idea:
-                0x00 = literal header without indexing, new name
-                name length + name bytes
-                value length + value bytes
-            */
-
+        if (type == 0x01 && stream_id != 0 && num >= 9 + len) {
             const char *name = "x-nf-signature";
             const char *value = "test-signature";
 
             unsigned char hpack[256];
             size_t pos = 0;
 
-            hpack[pos++] = 0x00; // literal without indexing, new name
-
+            hpack[pos++] = 0x00;
             hpack[pos++] = (unsigned char)strlen(name);
             memcpy(hpack + pos, name, strlen(name));
             pos += strlen(name);
@@ -87,21 +72,22 @@ int SSL_write(SSL *ssl, const void *buf, int num)
             memcpy(hpack + pos, value, strlen(value));
             pos += strlen(value);
 
+            int insert_at = 9 + len;
             int new_num = num + pos;
+
             unsigned char *new_buf = malloc(new_num);
             if (!new_buf)
                 return real_SSL_write(ssl, buf, num);
 
-            memcpy(new_buf, data, num);
+            memcpy(new_buf, data, insert_at);
+            memcpy(new_buf + insert_at, hpack, pos);
+            memcpy(new_buf + insert_at + pos, data + insert_at, num - insert_at);
 
-            uint32_t new_len = len + pos;
-            write24(new_buf, new_len);
-
-            memcpy(new_buf + num, hpack, pos);
+            write24(new_buf, len + pos);
 
             fprintf(stderr,
-                    "[HOOK] injected experimental h2 header block, +%zu bytes\n",
-                    pos);
+                    "[HOOK] inserted into HEADERS payload at=%d, +%zu bytes\n",
+                    insert_at, pos);
 
             int ret = real_SSL_write(ssl, new_buf, new_num);
             free(new_buf);
