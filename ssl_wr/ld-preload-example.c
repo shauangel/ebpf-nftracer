@@ -25,6 +25,7 @@ int SSL_write(SSL *ssl, const void *buf, int num)
 
     // 只示範 HTTP/1.1 header injection
     if (num > 0 && strstr(data, "\r\n\r\n")) {
+        fprintf(stderr, "[Hi]");
         const char *inject = "X-NF-Signature: test-signature\r\n";
 
         char *new_buf = malloc(num + strlen(inject) + 1);
