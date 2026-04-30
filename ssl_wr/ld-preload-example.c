@@ -42,7 +42,7 @@ int SSL_write(SSL *ssl, const void *buf, int num)
                num - header_len);
 
         int new_len = num + strlen(inject);
-
+        fprintf(stderr, "[TEST] Inject msg, len=%d\n", new_len);
         int ret = real_SSL_write(ssl, new_buf, new_len);
         free(new_buf);
         return ret;
