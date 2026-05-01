@@ -11,6 +11,29 @@ BPF_SRC = r"""
 #define MAX_SCAN 256
 #define SIG_LEN 32
 
+static __always_inline int try_inject(void *pos) {
+    char target[SIG_LEN] = "00000000000000000000000000000000";
+    char inject[SIG_LEN] = "ebpf-injected-signature-000001";
+    char cand[SIG_LEN];
+
+    bpf_probe_read_user(cand, SIG_LEN, pos);
+
+    int ok = 1;
+#pragma unroll
+    for (int j = 0; j < SIG_LEN; j++) {
+        if (cand[j] != target[j])
+            ok = 0;
+    }
+
+    if (ok) {
+        bpf_probe_write_user(pos, inject, SIG_LEN);
+        bpf_trace_printk("inject success\\n");
+        return 1;
+    }
+
+    return 0;
+}
+
 int trace_ssl_write(struct pt_regs *ctx) {
     void *buf = (void *)PT_REGS_PARM2(ctx);
     int len = (int)PT_REGS_PARM3(ctx);
@@ -34,36 +57,17 @@ int trace_ssl_write(struct pt_regs *ctx) {
     if (frame_len == 0 || frame_len > len - 9)
         return 0;
 
-    char target[SIG_LEN] = "00000000000000000000000000000000";
-    char inject[SIG_LEN] = "ebpf-injected-signature-000001";
+    void *payload = buf + 9;
 
-    int scan_len = frame_len;
-    if (scan_len > MAX_SCAN)
-        scan_len = MAX_SCAN;
-
-    for (int i = 0; i <= MAX_SCAN - SIG_LEN; i++) {
-        if (i > scan_len - SIG_LEN)
-            break;
-
-        char cand[SIG_LEN];
-        bpf_probe_read_user(cand, SIG_LEN, buf + 9 + i);
-
-        int matched = 1;
-
-#pragma unroll
-        for (int j = 0; j < SIG_LEN; j++) {
-            if (cand[j] != target[j]) {
-                matched = 0;
-                break;
-            }
-        }
-
-        if (matched) {
-            bpf_probe_write_user(buf + 9 + i, inject, SIG_LEN);
-            bpf_trace_printk("inject offset=%d\\n", i);
-            break;
-        }
-    }
+    if (try_inject(payload + 0)) return 0;
+    if (try_inject(payload + 16)) return 0;
+    if (try_inject(payload + 32)) return 0;
+    if (try_inject(payload + 48)) return 0;
+    if (try_inject(payload + 64)) return 0;
+    if (try_inject(payload + 80)) return 0;
+    if (try_inject(payload + 96)) return 0;
+    if (try_inject(payload + 112)) return 0;
+    if (try_inject(payload + 128)) return 0;
 
     return 0;
 }
