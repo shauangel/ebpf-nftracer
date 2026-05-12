@@ -25,6 +25,7 @@ struct attach_target nf_disc_funcs[] = {
 
 int nf_disc_funcs_cnt = sizeof(nf_disc_funcs) / sizeof(nf_disc_funcs[0]);
 
+
 /* ------ NF Management API ------ */
 struct attach_target nf_mngmt_funcs[] = {
     {
