@@ -88,8 +88,7 @@ SEC("uretprobe/net_http_readRequest")
 int probe_readrequest(struct pt_regs *ctx)
 {
     __u32 pid = bpf_get_current_pid_tgid() >> 32;
-    if (g_target_pid && pid != g_target_pid)
-        return 0;
+    if (g_target_pid && pid != g_target_pid) return 0;
 
     // Go amd64 register ABI: first return value lands in RAX
     __u64 req_ptr = PT_REGS_RC(ctx);
@@ -164,10 +163,12 @@ int probe_readrequest(struct pt_regs *ctx)
 
         // bpf_probe_read_user_str always null-terminates the dst buffer
         if (mptr) bpf_probe_read_user_str(ev->method,  sizeof(ev->method),  (void *)mptr);
-        if (pptr) bpf_probe_read_user_str(ev->path,    sizeof(ev->path),    (void *)pptr);
-                  bpf_probe_read_user_str(ev->hdr_key, sizeof(ev->hdr_key), (void *)kptr);
-                  bpf_probe_read_user_str(ev->hdr_val, sizeof(ev->hdr_val), (void *)vptr);
-
+        if (pptr){
+            bpf_probe_read_user_str(ev->path,    sizeof(ev->path),    (void *)pptr);
+            bpf_probe_read_user_str(ev->hdr_key, sizeof(ev->hdr_key), (void *)kptr);
+            bpf_probe_read_user_str(ev->hdr_val, sizeof(ev->hdr_val), (void *)vptr);
+        }
+        
         bpf_ringbuf_submit(ev, 0);
     }
 
