@@ -118,7 +118,7 @@ int main(int argc, char **argv)
 
     // Inject the target pid into the BPF read-only data section.
     // The BPF program uses this to drop events from unrelated processes.
-    skel->data->g_target_pid = (uint32_t)target_pid;
+    skel->rodata->g_target_pid = (uint32_t)target_pid;
 
     // ── load (JIT-compile + verify) ───────────────────────────────────────────
     if (nrf_read_bpf__load(skel)) {
