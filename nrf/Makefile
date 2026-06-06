@@ -24,9 +24,17 @@ COMMON_OBJ      := ../common.o
 
 TARGET          := $(NF)_loader
 
-.PHONY: all clean
+.PHONY: all clean vmlinux
 
 all: $(TARGET)
+
+# Generate vmlinux.h from the running kernel's BTF (CO-RE prerequisite).
+vmlinux:
+	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
+
+# Build the shared common object from the parent directory.
+$(COMMON_OBJ): ../common.c ../common.h
+	$(CC) $(CFLAGS) -I.. -c $< -o $@
 
 $(TARGET): $(SKEL_HDR) $(USER_OBJS) $(COMMON_OBJ)
 	$(CC) $(CFLAGS) $(USER_OBJS) $(COMMON_OBJ) -o $@ $(LIBS)
@@ -34,11 +42,11 @@ $(TARGET): $(SKEL_HDR) $(USER_OBJS) $(COMMON_OBJ)
 %.o: %.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-$(BPF_OBJ): $(BPF_SRC)
+$(BPF_OBJ): $(BPF_SRC) vmlinux.h
 	$(CLANG) $(BPF_CFLAGS) $(INCLUDES) -c $< -o $@
 
 $(SKEL_HDR): $(BPF_OBJ)
 	$(BPFTOOL) gen skeleton $< > $@
 
 clean:
-	rm -f $(TARGET) $(USER_OBJS) $(BPF_OBJ) $(SKEL_HDR)
+	rm -f $(TARGET) $(USER_OBJS) $(BPF_OBJ) $(SKEL_HDR) $(COMMON_OBJ)
