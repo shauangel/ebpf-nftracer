@@ -29,8 +29,7 @@ TARGET          := $(NF)_loader
 all: $(TARGET)
 
 # Generate vmlinux.h from the running kernel's BTF (CO-RE prerequisite).
-vmlinux:
-	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
+vmlinux: ../vmlinux.h
 
 # Build the shared common object from the parent directory.
 $(COMMON_OBJ): ../common.c ../common.h
