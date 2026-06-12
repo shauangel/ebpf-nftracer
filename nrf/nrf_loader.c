@@ -112,7 +112,7 @@ int main(int argc, char **argv)
     struct ring_buffer    *rb   = NULL;
 
     /* 1. Discover NRF container process & executable */
-    char  exe_path[256] = {}
+    char  exe_path[256] = {};
     pid_t pid;
 
     printf("[*] Looking for NRF container process...\n");
