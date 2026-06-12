@@ -29,6 +29,26 @@ static int parse_cgroupv2_path(const char *line, char *out, size_t out_len) {
     return 0;
 }
 
+uint64_t get_nf_cgroup_id(pid_t pid) {
+    // get cgroup path
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%ld/cgroup", pid);
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+
+    char line[512], dir[512] = {};
+    while (fgets(line, sizeof(line), f))
+        if (parse_cgroupv2_path(line, dir, sizeof(dir)) == 0) break;
+    fclose(f);
+    if (dir[0] == '\0') return 0;
+
+    uint64_t cg_id = cgroup_id_from_path(dir);
+    if (cg_id == 0) return 0;
+    // printf("cgroup path: %s\n", dir);
+    // printf("cgroup id: %llu\n", (unsigned long long)cg_id);
+    return cg_id;
+}
+
 /* TODO: multiple nf support (same specific type of nf) */
 /* ── find_nf (single nf) ───────────────────────────────────── */
 int find_nf(const char *nf_name) {
@@ -65,29 +85,6 @@ int find_nf(const char *nf_name) {
 
     closedir(dp);
     return -1;
-}
-
-/* ── get_nf_cgroup_id (new) ──────────────────────────────────────────────── */
-
-uint64_t get_nf_cgroup_id(pid_t pid) {
-    // get cgroup path
-    char path[64];
-    snprintf(path, sizeof(path), "/proc/%ld/cgroup", pid);
-    FILE *f = fopen(path, "r");
-    if (!f) return 0;
-
-    char line[512], dir[512] = {};
-    while (fgets(line, sizeof(line), f))
-        if (parse_cgroupv2_path(line, dir, sizeof(dir)) == 0) break;
-    fclose(f);
-    if (dir[0] == '\0') return 0;
-
-    uint64_t cg_id = cgroup_id_from_path(dir);
-    if (cg_id == 0) return 0;
-    printf("cgroup path: %s\n", dir);
-    printf("cgroup id: %llu\n", (unsigned long long)cg_id);
-
-    return cg_id;
 }
 
 

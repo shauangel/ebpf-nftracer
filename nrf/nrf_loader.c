@@ -131,80 +131,80 @@ int main(int argc, char **argv)
     }
     printf("    cgroup_id=%llu\n\n", (unsigned long long)cgroup_id);
 
-//     /* 3. Load BPF skeleton */
-//     skel = nrf_tracer_bpf__open_and_load();
-//     if (!skel) {
-//         fprintf(stderr, "error: failed to open/load BPF skeleton\n");
-//         return 1;
-//     }
+    /* 3. Load BPF skeleton */
+    skel = nrf_tracer_bpf__open_and_load();
+    if (!skel) {
+        fprintf(stderr, "error: failed to open/load BPF skeleton\n");
+        return 1;
+    }
 
-//     /* 4. Populate cgroup filter map */
-//     {
-//         uint32_t key = 0;
-//         err = bpf_map__update_elem(skel->maps.nrf_cgroup_map,
-//                                    &key, sizeof(key),
-//                                    &cgroup_id, sizeof(cgroup_id),
-//                                    BPF_ANY);
-//         if (err) {
-//             fprintf(stderr, "error: nrf_cgroup_map update: %d\n", err);
-//             goto cleanup;
-//         }
-//     }
+    /* 4. Populate cgroup filter map */
+    {
+        uint32_t key = 0;
+        err = bpf_map__update_elem(skel->maps.nrf_cgroup_map,
+                                   &key, sizeof(key),
+                                   &cgroup_id, sizeof(cgroup_id),
+                                   BPF_ANY);
+        if (err) {
+            fprintf(stderr, "error: nrf_cgroup_map update: %d\n", err);
+            goto cleanup;
+        }
+    }
 
-//     /* 5. Attach NRF API uprobes */
-//     printf("[*] Attaching uprobes...\n");
-//     if (attach_programs(skel, exe_path, pid,
-//                         nf_mngmt_funcs, nf_mngmt_funcs_cnt) < 0 ||
-//         attach_programs(skel, exe_path, pid,
-//                         auth_funcs, auth_funcs_cnt)           < 0 ||
-//         attach_programs(skel, exe_path, pid,
-//                         nf_disc_funcs, nf_disc_funcs_cnt)     < 0) {
-//         err = 1;
-//         goto cleanup;
-//     }
+    /* 5. Attach NRF API uprobes */
+    printf("[*] Attaching uprobes...\n");
+    if (attach_programs(skel, exe_path, pid,
+                        nf_mngmt_funcs, nf_mngmt_funcs_cnt) < 0 ||
+        attach_programs(skel, exe_path, pid,
+                        auth_funcs, auth_funcs_cnt)           < 0 ||
+        attach_programs(skel, exe_path, pid,
+                        nf_disc_funcs, nf_disc_funcs_cnt)     < 0) {
+        err = 1;
+        goto cleanup;
+    }
 
-//     /* 6. Attach syscall tracepoints */
-//     printf("[*] Attaching tracepoints...\n");
-//     if (attach_tracepoints(skel, syscall_tps, syscall_tps_cnt) < 0) {
-//         err = 1;
-//         goto cleanup;
-//     }
+    /* 6. Attach syscall tracepoints */
+    printf("[*] Attaching tracepoints...\n");
+    if (attach_tracepoints(skel, syscall_tps, syscall_tps_cnt) < 0) {
+        err = 1;
+        goto cleanup;
+    }
 
-//     /* 7. Ring buffer + event loop */
-//     rb = ring_buffer__new(bpf_map__fd(skel->maps.events),
-//                           handle_event, NULL, NULL);
-//     if (!rb) {
-//         fprintf(stderr, "error: ring_buffer__new failed\n");
-//         err = 1;
-//         goto cleanup;
-//     }
+    /* 7. Ring buffer + event loop */
+    rb = ring_buffer__new(bpf_map__fd(skel->maps.events),
+                          handle_event, NULL, NULL);
+    if (!rb) {
+        fprintf(stderr, "error: ring_buffer__new failed\n");
+        err = 1;
+        goto cleanup;
+    }
 
-//     signal(SIGINT,  handle_signal);
-//     signal(SIGTERM, handle_signal);
+    signal(SIGINT,  handle_signal);
+    signal(SIGTERM, handle_signal);
 
-//     printf("\n[*] Tracing NRF (pid=%d). Ctrl+C to stop.\n\n", pid);
-//     printf("%-22s  %-4s  %-9s  %s\n",
-//            "TIMESTAMP", "NF", "EVENT", "DETAIL");
-//     printf("%-22s  %-4s  %-9s  %s\n",
-//            "──────────────────────", "────", "─────────",
-//            "────────────────────────────────");
+    printf("\n[*] Tracing NRF (pid=%d). Ctrl+C to stop.\n\n", pid);
+    printf("%-22s  %-4s  %-9s  %s\n",
+           "TIMESTAMP", "NF", "EVENT", "DETAIL");
+    printf("%-22s  %-4s  %-9s  %s\n",
+           "──────────────────────", "────", "─────────",
+           "────────────────────────────────");
 
-//     while (!stop) {
-//         err = ring_buffer__poll(rb, 100);
-//         if (err < 0 && err != -EINTR) {
-//             fprintf(stderr, "ring_buffer__poll: %d\n", err);
-//             break;
-//         }
-//         err = 0;
-//     }
+    while (!stop) {
+        err = ring_buffer__poll(rb, 100);
+        if (err < 0 && err != -EINTR) {
+            fprintf(stderr, "ring_buffer__poll: %d\n", err);
+            break;
+        }
+        err = 0;
+    }
 
-// cleanup:
-//     printf("\n[*] Detaching...\n");
-//     ring_buffer__free(rb);
-//     detach_tracepoints(syscall_tps, syscall_tps_cnt);
-//     detach_programs(nf_mngmt_funcs, nf_mngmt_funcs_cnt);
-//     detach_programs(auth_funcs,     auth_funcs_cnt);
-//     detach_programs(nf_disc_funcs,  nf_disc_funcs_cnt);
-//     nrf_tracer_bpf__destroy(skel);
-//     return err;
+cleanup:
+    printf("\n[*] Detaching...\n");
+    ring_buffer__free(rb);
+    detach_tracepoints(syscall_tps, syscall_tps_cnt);
+    detach_programs(nf_mngmt_funcs, nf_mngmt_funcs_cnt);
+    detach_programs(auth_funcs,     auth_funcs_cnt);
+    detach_programs(nf_disc_funcs,  nf_disc_funcs_cnt);
+    nrf_tracer_bpf__destroy(skel);
+    return err;
 }
