@@ -16,7 +16,7 @@
 #include <bpf/libbpf.h>
 
 #include "nrf_tracer.skel.h"
-#include "events.h"
+#include "../events.h"
 #include "../common.h"
 #include "nrf_functions.h"
 #include "nrf_comm.h"
