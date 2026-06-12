@@ -73,7 +73,7 @@ uint64_t get_nf_cgroup_id(pid_t pid) {
     // get cgroup path
     char path[64];
     snprintf(path, sizeof(path), "/proc/%ld/cgroup", pid);
-    f = fopen(path, "r");
+    FILE *f = fopen(path, "r");
     if (!f) return 0;
 
     char line[512], dir[512] = {};
