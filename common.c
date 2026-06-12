@@ -48,7 +48,6 @@ int find_nf(const char *nf_name) {
         // construct process path
         char path[64];
         snprintf(path, sizeof(path), "/proc/%ld/comm", pid);
-        printf("path: %s\n", path);
         FILE *f = fopen(path, "r");
         if (!f) continue;
 
@@ -59,7 +58,8 @@ int find_nf(const char *nf_name) {
         comm[strcspn(comm, "\n")] = '\0';
         if (strcmp(comm, nf_name) != 0)
             continue;
-        
+        printf("path: %s\n", path);
+
         // get cgroup path
         snprintf(path, sizeof(path), "/proc/%ld/cgroup", pid);
         f = fopen(path, "r");
@@ -69,6 +69,13 @@ int find_nf(const char *nf_name) {
         while (fgets(line, sizeof(line), f))
             if (parse_cgroupv2_path(line, dir, sizeof(dir)) == 0) break;
         fclose(f);
+
+        if (dir[0] == '\0') continue;
+
+        uint64_t cg_id = cgroup_id_from_path(dir);
+        if (cg_id == 0) continue;
+        printf("cgroup path: %s\n", dir);
+        printf("cgroup id: %llu\n", (unsigned long long)cg_id);
 
         closedir(dp);
         return atoi(de->d_name);
