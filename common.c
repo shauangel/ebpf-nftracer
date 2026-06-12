@@ -10,76 +10,65 @@
 
 #include "common.h"
 
-/* ── find_nf_exe (original, unchanged) ───────────────────────────────────── */
+// ── cgroup discovery ───────────────────────
 
-static int is_pid_dir(const char *name)
-{
-    for (int i = 0; name[i]; i++) {
-        if (!isdigit((unsigned char)name[i]))
-            return 0;
-    }
-    return name[0] != '\0';
+static uint64_t cgroup_id_from_path(const char *path) {
+    struct stat st;
+    if (stat(path, &st) != 0)
+        return 0;
+    return (uint64_t)st.st_ino;
 }
 
-static int looks_like_nf_cmdline(const char *cmdline, const char *nf_name)
-{
-    char pattern1[64];
-    char pattern2[64];
-    char pattern3[128];
-
-    snprintf(pattern1, sizeof(pattern1), "./bin/%s", nf_name);
-    snprintf(pattern2, sizeof(pattern2), "/bin/%s", nf_name);
-    snprintf(pattern3, sizeof(pattern3), "free5gc/bin/%s", nf_name);
-
-    return strstr(cmdline, pattern1) ||
-           strstr(cmdline, pattern2) ||
-           strstr(cmdline, pattern3);
-}
-
-int find_nf_exe(const char *nf_name, char *exe_path, size_t exe_path_sz)
-{
-    DIR *dp = opendir("/proc");
-    struct dirent *de;
-
-    if (!dp) {
-        perror("opendir(/proc)");
+static int parse_cgroupv2_path(const char *line, char *out, size_t out_len) {
+    if (strncmp(line, "0::/", 4) != 0)
         return -1;
-    }
+    snprintf(out, out_len, "/sys/fs/cgroup/%s", line + 4);
+    size_t n = strlen(out);
+    if (n > 0 && out[n - 1] == '\n')
+        out[n - 1] = '\0';
+    return 0;
+}
 
+
+/* ── find_nf ───────────────────────────────────── */
+int find_nf(const char *nf_name) {
+    DIR *dp = opendir("/proc");
+    if (!dp) { perror("opendir(/proc)"); return -1; }
+
+
+    struct dirent *de;
     while ((de = readdir(dp)) != NULL) {
-        char cmdline_path[PATH_MAX];
-        char proc_exe_path[PATH_MAX];
-        char cmdline[4096];
-        FILE *f;
-        size_t nread;
-        ssize_t llen;
 
-        if (!is_pid_dir(de->d_name))
+        // scan through pid (proc file)
+        char *end;
+        long pid = strtol(de->d_name, &end, 10);
+        if (*end != '\0' || pid <= 0)
             continue;
 
-        snprintf(cmdline_path, sizeof(cmdline_path),
-                 "/proc/%s/comm", de->d_name);
-        f = fopen(cmdline_path, "rb");
-        if (!f)
-            continue;
+        // construct process path
+        char path[64];
+        snprintf(path, sizeof(path), "/proc/%ld/comm", pid);
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
 
-        nread = fread(cmdline, 1, sizeof(cmdline) - 1, f);
+        // get command name & check
+        char comm[32] = {};
+        fgets(comm, sizeof(comm), f);
+        fclose(f);
+        comm[strcspn(comm, "\n")] = '\0';
+        if (strcmp(comm, nf_name) != 0)
+            continue;
+        
+        // get cgroup path
+        snprintf(path, sizeof(path), "/proc/%ld/cgroup", pid);
+        f = fopen(path, "r");
+        if (!f) continue;
+
+        char line[512], dir[512] = {};
+        while (fgets(line, sizeof(line), f))
+            if (parse_cgroupv2_path(line, dir, sizeof(dir)) == 0) break;
         fclose(f);
 
-        if (nread == 0)
-            continue;
-        cmdline[nread] = '\0';
-
-        if (!looks_like_nf_cmdline(cmdline, nf_name))
-            continue;
-
-        snprintf(proc_exe_path, sizeof(proc_exe_path),
-                 "/proc/%s/exe", de->d_name);
-        llen = readlink(proc_exe_path, exe_path, exe_path_sz - 1);
-        if (llen < 0)
-            continue;
-
-        exe_path[llen] = '\0';
         closedir(dp);
         return atoi(de->d_name);
     }
@@ -132,3 +121,6 @@ uint64_t get_nf_cgroup_id(pid_t pid)
 
     return (uint64_t)st.st_ino;
 }
+
+
+
