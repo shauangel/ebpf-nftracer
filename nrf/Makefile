@@ -24,12 +24,9 @@ COMMON_OBJ      := ../common.o
 
 TARGET          := $(NF)_loader
 
-.PHONY: all clean vmlinux
+.PHONY: all clean
 
 all: $(TARGET)
-
-# Generate vmlinux.h from the running kernel's BTF (CO-RE prerequisite).
-vmlinux: ../vmlinux.h
 
 # Build the shared common object from the parent directory.
 $(COMMON_OBJ): ../common.c ../common.h
@@ -41,7 +38,7 @@ $(TARGET): $(SKEL_HDR) $(USER_OBJS) $(COMMON_OBJ)
 %.o: %.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-$(BPF_OBJ): $(BPF_SRC) vmlinux.h
+$(BPF_OBJ): $(BPF_SRC) ../vmlinux.h
 	$(CLANG) $(BPF_CFLAGS) $(INCLUDES) -c $< -o $@
 
 $(SKEL_HDR): $(BPF_OBJ)
