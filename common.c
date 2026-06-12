@@ -74,17 +74,16 @@ uint64_t get_nf_cgroup_id(pid_t pid) {
     char path[64];
     snprintf(path, sizeof(path), "/proc/%ld/cgroup", pid);
     f = fopen(path, "r");
-    if (!f) continue;
+    if (!f) return 0;
 
     char line[512], dir[512] = {};
     while (fgets(line, sizeof(line), f))
         if (parse_cgroupv2_path(line, dir, sizeof(dir)) == 0) break;
     fclose(f);
-
-    if (dir[0] == '\0') continue;
+    if (dir[0] == '\0') return 0;
 
     uint64_t cg_id = cgroup_id_from_path(dir);
-    if (cg_id == 0) continue;
+    if (cg_id == 0) return 0;
     printf("cgroup path: %s\n", dir);
     printf("cgroup id: %llu\n", (unsigned long long)cg_id);
 
