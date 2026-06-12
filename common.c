@@ -58,7 +58,7 @@ int find_nf_exe(const char *nf_name, char *exe_path, size_t exe_path_sz)
             continue;
 
         snprintf(cmdline_path, sizeof(cmdline_path),
-                 "/proc/%s/cmdline", de->d_name);
+                 "/proc/%s/comm", de->d_name);
         f = fopen(cmdline_path, "rb");
         if (!f)
             continue;
