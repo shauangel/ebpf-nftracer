@@ -122,14 +122,7 @@ int main(int argc, char **argv)
         return 1;
     }
     printf("    pid=%-6d\n", pid);
-    char proc_exe[64];
-    snprintf(proc_exe, sizeof(proc_exe), "/proc/%d/exe", pid);
-    ssize_t n = readlink(proc_exe, exe_path, sizeof(exe_path) - 1);
-    if (n < 0) {
-        perror("readlink /proc/<pid>/exe");
-        return 1;
-    }
-    exe_path[n] = '\0';
+    snprintf(exe_path, sizeof(exe_path), "/proc/%d/exe", pid);
     printf("    exe=%s\n", exe_path);
 
     /* 2. Get container cgroup ID */
