@@ -111,8 +111,8 @@ int main(int argc, char **argv)
     struct nrf_tracer_bpf *skel = NULL;
     struct ring_buffer    *rb   = NULL;
 
-    /* 1. Discover NRF container process */
-    char  exe_path[256] = {};
+    /* 1. Discover NRF container process & executable */
+    char  exe_path[256] = {}
     pid_t pid;
 
     printf("[*] Looking for NRF container process...\n");
@@ -160,17 +160,17 @@ int main(int argc, char **argv)
         }
     }
 
-    // /* 5. Attach NRF API uprobes */
-    // printf("[*] Attaching uprobes...\n");
-    // if (attach_programs(skel, exe_path, pid,
-    //                     nf_mngmt_funcs, nf_mngmt_funcs_cnt) < 0 ||
-    //     attach_programs(skel, exe_path, pid,
-    //                     auth_funcs, auth_funcs_cnt)           < 0 ||
-    //     attach_programs(skel, exe_path, pid,
-    //                     nf_disc_funcs, nf_disc_funcs_cnt)     < 0) {
-    //     err = 1;
-    //     goto cleanup;
-    // }
+    /* 5. Attach NRF API uprobes */
+    printf("[*] Attaching uprobes...\n");
+    if (attach_programs(skel, exe_path, pid,
+                        nf_mngmt_funcs, nf_mngmt_funcs_cnt) < 0 ||
+        attach_programs(skel, exe_path, pid,
+                        auth_funcs, auth_funcs_cnt)           < 0 ||
+        attach_programs(skel, exe_path, pid,
+                        nf_disc_funcs, nf_disc_funcs_cnt)     < 0) {
+        err = 1;
+        goto cleanup;
+    }
 
     /* 6. Attach syscall tracepoints */
     printf("[*] Attaching tracepoints...\n");
