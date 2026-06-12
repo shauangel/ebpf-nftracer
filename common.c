@@ -29,17 +29,15 @@ static int parse_cgroupv2_path(const char *line, char *out, size_t out_len) {
     return 0;
 }
 
-
-/* ── find_nf ───────────────────────────────────── */
+/* TODO: multiple nf support (same specific type of nf) */
+/* ── find_nf (single nf) ───────────────────────────────────── */
 int find_nf(const char *nf_name) {
     DIR *dp = opendir("/proc");
     if (!dp) { perror("opendir(/proc)"); return -1; }
-
-
     struct dirent *de;
-    while ((de = readdir(dp)) != NULL) {
 
-        // scan through pid (proc file)
+    // scan through pid (proc file)
+    while ((de = readdir(dp)) != NULL) {
         char *end;
         long pid = strtol(de->d_name, &end, 10);
         if (*end != '\0' || pid <= 0)
@@ -60,23 +58,24 @@ int find_nf(const char *nf_name) {
             continue;
         printf("path: %s\n", path);
 
-        // get cgroup path
-        snprintf(path, sizeof(path), "/proc/%ld/cgroup", pid);
-        f = fopen(path, "r");
-        if (!f) continue;
+        // // get cgroup path
+        // snprintf(path, sizeof(path), "/proc/%ld/cgroup", pid);
+        // f = fopen(path, "r");
+        // if (!f) continue;
 
-        char line[512], dir[512] = {};
-        while (fgets(line, sizeof(line), f))
-            if (parse_cgroupv2_path(line, dir, sizeof(dir)) == 0) break;
-        fclose(f);
+        // char line[512], dir[512] = {};
+        // while (fgets(line, sizeof(line), f))
+        //     if (parse_cgroupv2_path(line, dir, sizeof(dir)) == 0) break;
+        // fclose(f);
 
-        if (dir[0] == '\0') continue;
+        // if (dir[0] == '\0') continue;
 
-        uint64_t cg_id = cgroup_id_from_path(dir);
-        if (cg_id == 0) continue;
-        printf("cgroup path: %s\n", dir);
-        printf("cgroup id: %llu\n", (unsigned long long)cg_id);
+        // uint64_t cg_id = cgroup_id_from_path(dir);
+        // if (cg_id == 0) continue;
+        // printf("cgroup path: %s\n", dir);
+        // printf("cgroup id: %llu\n", (unsigned long long)cg_id);
 
+        // stop if find one
         closedir(dp);
         return atoi(de->d_name);
     }
