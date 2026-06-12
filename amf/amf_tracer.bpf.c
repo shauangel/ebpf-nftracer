@@ -23,6 +23,33 @@ struct {
     __uint(max_entries, 1 << 24);   /* 16 MB */
 } events SEC(".maps");
 
+/* Single-entry array: the AMF container's cgroupv2 ID.
+ * Written by the loader immediately after skeleton load. */
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key,   __u32);
+    __type(value, __u64);
+} amf_cgroup_map SEC(".maps");
+
+/* Scratch: save connect() entry args across the syscall boundary */
+struct _connect_args { __u64 fd; struct sockaddr *addr; };
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key,   __u64);           /* tid */
+    __type(value, struct _connect_args);
+} connect_scratch SEC(".maps");
+
+/* Scratch: save accept4() entry args across the syscall boundary */
+struct _accept_args { __u64 fd; struct sockaddr *addr; };
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key,   __u64);
+    __type(value, struct _accept_args);
+} accept_scratch SEC(".maps");
+
 /* ── Helpers ────────────────────────────────────────────────────────────── */
 
 /* Reserve a ring-buffer slot and fill common fields */
@@ -51,7 +78,6 @@ static __always_inline int is_amf_cgroup(void)
         return 0;
     return bpf_get_current_cgroup_id() == *stored;
 }
-
 
 /* Read IPv4 sockaddr fields into an event (connect / accept) */
 static __always_inline void read_sockaddr_in(struct event *e,
