@@ -48,6 +48,7 @@ int find_nf(const char *nf_name) {
         // construct process path
         char path[64];
         snprintf(path, sizeof(path), "/proc/%ld/comm", pid);
+        printf("path: %s\n", path);
         FILE *f = fopen(path, "r");
         if (!f) continue;
 

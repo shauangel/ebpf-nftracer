@@ -121,7 +121,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "error: NRF not found — is the container running?\n");
         return 1;
     }
-    printf("    pid=%-6d  exe=%s\n", pid, exe_path);
+    printf("    pid=%-6d\n", pid);
 
 //     /* 2. Get container cgroup ID */
 //     uint64_t cgroup_id = get_nf_cgroup_id((pid_t)pid);
