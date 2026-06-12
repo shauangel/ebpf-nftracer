@@ -123,13 +123,13 @@ int main(int argc, char **argv)
     }
     printf("    pid=%-6d\n", pid);
 
-//     /* 2. Get container cgroup ID */
-//     uint64_t cgroup_id = get_nf_cgroup_id((pid_t)pid);
-//     if (cgroup_id == 0) {
-//         fprintf(stderr, "error: failed to get cgroup ID for pid %d\n", pid);
-//         return 1;
-//     }
-//     printf("    cgroup_id=%llu\n\n", (unsigned long long)cgroup_id);
+    /* 2. Get container cgroup ID */
+    uint64_t cgroup_id = get_nf_cgroup_id((pid_t)pid);
+    if (cgroup_id == 0) {
+        fprintf(stderr, "error: failed to get cgroup ID for pid %d\n", pid);
+        return 1;
+    }
+    printf("    cgroup_id=%llu\n\n", (unsigned long long)cgroup_id);
 
 //     /* 3. Load BPF skeleton */
 //     skel = nrf_tracer_bpf__open_and_load();

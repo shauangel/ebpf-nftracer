@@ -56,24 +56,7 @@ int find_nf(const char *nf_name) {
         comm[strcspn(comm, "\n")] = '\0';
         if (strcmp(comm, nf_name) != 0)
             continue;
-        printf("path: %s\n", path);
-
-        // // get cgroup path
-        // snprintf(path, sizeof(path), "/proc/%ld/cgroup", pid);
-        // f = fopen(path, "r");
-        // if (!f) continue;
-
-        // char line[512], dir[512] = {};
-        // while (fgets(line, sizeof(line), f))
-        //     if (parse_cgroupv2_path(line, dir, sizeof(dir)) == 0) break;
-        // fclose(f);
-
-        // if (dir[0] == '\0') continue;
-
-        // uint64_t cg_id = cgroup_id_from_path(dir);
-        // if (cg_id == 0) continue;
-        // printf("cgroup path: %s\n", dir);
-        // printf("cgroup id: %llu\n", (unsigned long long)cg_id);
+        // printf("path: %s\n", path);
 
         // stop if find one
         closedir(dp);
@@ -86,47 +69,26 @@ int find_nf(const char *nf_name) {
 
 /* ── get_nf_cgroup_id (new) ──────────────────────────────────────────────── */
 
-uint64_t get_nf_cgroup_id(pid_t pid)
-{
+uint64_t get_nf_cgroup_id(pid_t pid) {
+    // get cgroup path
     char path[64];
-    snprintf(path, sizeof(path), "/proc/%d/cgroup", pid);
+    snprintf(path, sizeof(path), "/proc/%ld/cgroup", pid);
+    f = fopen(path, "r");
+    if (!f) continue;
 
-    FILE *f = fopen(path, "r");
-    if (!f) {
-        fprintf(stderr, "get_nf_cgroup_id: cannot open %s: %s\n",
-                path, strerror(errno));
-        return 0;
-    }
-
-    /* Find the cgroupv2 unified hierarchy line: "0::/<rel-path>" */
-    char line[512];
-    char cg_rel[480] = {};
-    while (fgets(line, sizeof(line), f)) {
-        if (strncmp(line, "0::/", 4) == 0) {
-            strncpy(cg_rel, line + 4, sizeof(cg_rel) - 1);
-            cg_rel[strcspn(cg_rel, "\n")] = '\0';
-            break;
-        }
-    }
+    char line[512], dir[512] = {};
+    while (fgets(line, sizeof(line), f))
+        if (parse_cgroupv2_path(line, dir, sizeof(dir)) == 0) break;
     fclose(f);
 
-    if (cg_rel[0] == '\0') {
-        fprintf(stderr, "get_nf_cgroup_id: no cgroupv2 entry for pid %d\n", pid);
-        return 0;
-    }
+    if (dir[0] == '\0') continue;
 
-    /* Stat the cgroup directory — inode == cgroup_id on cgroupv2 */
-    char full[512];
-    snprintf(full, sizeof(full), "/sys/fs/cgroup/%s", cg_rel);
+    uint64_t cg_id = cgroup_id_from_path(dir);
+    if (cg_id == 0) continue;
+    printf("cgroup path: %s\n", dir);
+    printf("cgroup id: %llu\n", (unsigned long long)cg_id);
 
-    struct stat st;
-    if (stat(full, &st) != 0) {
-        fprintf(stderr, "get_nf_cgroup_id: stat(%s): %s\n",
-                full, strerror(errno));
-        return 0;
-    }
-
-    return (uint64_t)st.st_ino;
+    return cg_id;
 }
 
 
