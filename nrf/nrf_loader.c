@@ -122,6 +122,15 @@ int main(int argc, char **argv)
         return 1;
     }
     printf("    pid=%-6d\n", pid);
+    char proc_exe[64];
+    snprintf(proc_exe, sizeof(proc_exe), "/proc/%d/exe", pid);
+    ssize_t n = readlink(proc_exe, exe_path, sizeof(exe_path) - 1);
+    if (n < 0) {
+        perror("readlink /proc/<pid>/exe");
+        return 1;
+    }
+    exe_path[n] = '\0';
+    printf("    exe=%s\n", exe_path);
 
     /* 2. Get container cgroup ID */
     uint64_t cgroup_id = get_nf_cgroup_id((pid_t)pid);
@@ -151,17 +160,17 @@ int main(int argc, char **argv)
         }
     }
 
-    /* 5. Attach NRF API uprobes */
-    printf("[*] Attaching uprobes...\n");
-    if (attach_programs(skel, exe_path, pid,
-                        nf_mngmt_funcs, nf_mngmt_funcs_cnt) < 0 ||
-        attach_programs(skel, exe_path, pid,
-                        auth_funcs, auth_funcs_cnt)           < 0 ||
-        attach_programs(skel, exe_path, pid,
-                        nf_disc_funcs, nf_disc_funcs_cnt)     < 0) {
-        err = 1;
-        goto cleanup;
-    }
+    // /* 5. Attach NRF API uprobes */
+    // printf("[*] Attaching uprobes...\n");
+    // if (attach_programs(skel, exe_path, pid,
+    //                     nf_mngmt_funcs, nf_mngmt_funcs_cnt) < 0 ||
+    //     attach_programs(skel, exe_path, pid,
+    //                     auth_funcs, auth_funcs_cnt)           < 0 ||
+    //     attach_programs(skel, exe_path, pid,
+    //                     nf_disc_funcs, nf_disc_funcs_cnt)     < 0) {
+    //     err = 1;
+    //     goto cleanup;
+    // }
 
     /* 6. Attach syscall tracepoints */
     printf("[*] Attaching tracepoints...\n");
