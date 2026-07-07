@@ -78,7 +78,7 @@ int xdp_prog(struct xdp_md *ctx)
     __u16 chunk_len = bpf_ntohs(chunk->length);
     __u32 ppid = bpf_ntohl(chunk->ppid);
 
-    bpf_printk("SCTP sport=%d dport=%d chunk=%d len=%d ppid=%d",
+    bpf_printk("--> SCTP sport=%d dport=%d chunk=%d len=%d ppid=%d",
             bpf_ntohs(sctp->source),
             bpf_ntohs(sctp->dest),
             chunk_type,
@@ -94,15 +94,15 @@ int xdp_prog(struct xdp_md *ctx)
     void *ngap = (void *)(chunk + 1);
     if (ngap + 16 > data_end)
         return XDP_PASS;
-    bpf_printk("NGAP[0..7]=%x %x %x %x %x %x %x %x",
-        *(__u8 *)(ngap + 0),
-        *(__u8 *)(ngap + 1),
-        *(__u8 *)(ngap + 2),
-        *(__u8 *)(ngap + 3),
-        *(__u8 *)(ngap + 4),
-        *(__u8 *)(ngap + 5),
-        *(__u8 *)(ngap + 6),
-        *(__u8 *)(ngap + 7));
+    __u8 b0 = *(__u8 *)(ngap + 0);
+    __u8 b1 = *(__u8 *)(ngap + 1);
+    __u8 b2 = *(__u8 *)(ngap + 2);
+
+    __u16 procedure_code = ((__u16)b0 << 8) | b1;
+    __u8 criticality = b2;
+
+    bpf_printk("NGAP procedureCode=%d criticality=0x%x <--",
+            procedure_code, criticality);
 
     return XDP_PASS;
 }
