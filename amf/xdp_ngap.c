@@ -5,6 +5,24 @@
 #define ETH_P_IP 0x0800
 #define IPPROTO_SCTP 132
 #define SCTP_PPID_NGAP 60
+#define SCTP_DATA 0
+
+struct sctphdr_simple {
+    __u16 source;
+    __u16 dest;
+    __u32 vtag;
+    __u32 checksum;
+};
+
+struct sctp_data_chunk {
+    __u8 type;
+    __u8 flags;
+    __u16 length;
+    __u32 tsn;
+    __u16 stream_id;
+    __u16 stream_seq;
+    __u32 ppid;
+};
 
 char LICENSE[] SEC("license") = "GPL";
 
