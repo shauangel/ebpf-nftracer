@@ -27,9 +27,14 @@ int xdp_prog(struct xdp_md *ctx)
     if ((void *)(iph + 1) > data_end)
     return XDP_PASS;
 
-    bpf_printk("XDP eth proto=0x%x IP proto=%d",
-               bpf_ntohs(eth->h_proto),
-               iph->protocol);
+    if (iph->protocol == IPPROTO_SCTP)
+    {
+        bpf_printk("XDP eth proto=0x%x IP proto=%d src=%x dst=%x\n",
+                   bpf_ntohs(eth->h_proto),
+                   iph->protocol,
+                   iph->saddr,
+                   iph->daddr);
+    }
 
     return XDP_PASS;
 }
