@@ -24,9 +24,10 @@ int xdp_prog(struct xdp_md *ctx)
         return XDP_PASS;
 
     struct iphdr *iph = (void *)(eth + 1);
+    if ((void *)(iph + 1) > data_end)
+    return XDP_PASS;
 
-    bpf_printk("XDP ifindex=%d eth proto=0x%x IP proto=%d",
-               ctx->ingress_ifindex,
+    bpf_printk("XDP eth proto=0x%x IP proto=%d",
                bpf_ntohs(eth->h_proto),
                iph->protocol);
 
