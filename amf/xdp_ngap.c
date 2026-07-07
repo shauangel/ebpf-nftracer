@@ -85,14 +85,24 @@ int xdp_prog(struct xdp_md *ctx)
             chunk_len,
             ppid);
 
-    // if (chunk_type != SCTP_DATA)
-    //     return XDP_PASS;
+    if (chunk_type != SCTP_DATA)
+        return XDP_PASS;
 
-    // if (ppid != SCTP_PPID_NGAP)
-    //     return XDP_PASS;
+    if (ppid != SCTP_PPID_NGAP)
+        return XDP_PASS;
 
-    // void *ngap = (void *)(chunk + 1);
-    // if (ngap + 8 > data_end)
-    //     return XDP_PASS;
+    void *ngap = (void *)(chunk + 1);
+    if (ngap + 16 > data_end)
+        return XDP_PASS;
+    bpf_printk("NGAP[0..7]=%x %x %x %x %x %x %x %x",
+        *(__u8 *)(ngap + 0),
+        *(__u8 *)(ngap + 1),
+        *(__u8 *)(ngap + 2),
+        *(__u8 *)(ngap + 3),
+        *(__u8 *)(ngap + 4),
+        *(__u8 *)(ngap + 5),
+        *(__u8 *)(ngap + 6),
+        *(__u8 *)(ngap + 7));
+
     return XDP_PASS;
 }
