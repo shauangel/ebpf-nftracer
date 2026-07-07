@@ -18,34 +18,31 @@ int xdp_ngap(struct xdp_md *ctx)
 {
     void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;
-
+    
     struct ethhdr *eth = data;
-    if ((void *)(eth + 1) > data_end)
-        return XDP_PASS;
+    if ((void *)(eth + 1) > data_end) return XDP_PASS;
 
-    if (eth->h_proto != bpf_htons(ETH_P_IP))
-        return XDP_PASS;
+    bpf_printk("XDP eth proto=0x%x\n", bpf_ntohs(eth->h_proto));
+
+    if (eth->h_proto != bpf_htons(ETH_P_IP)) return XDP_PASS;
 
     struct iphdr *ip = (void *)(eth + 1);
-    if ((void *)(ip + 1) > data_end)
-        return XDP_PASS;
+    if ((void *)(ip + 1) > data_end) return XDP_PASS;
 
-    if (ip->protocol != IPPROTO_SCTP)
-        return XDP_PASS;
+    bpf_printk("IP proto=%d src=%x dst=%x\n", ip->protocol, ip->saddr, ip->daddr);
 
-    if (ip->ihl < 5)
-        return XDP_PASS;
+    if (ip->protocol != IPPROTO_SCTP) return XDP_PASS;
 
-    struct sctphdr *sctp = (void *)ip + ip->ihl * 4;
-    if ((void *)(sctp + 1) > data_end)
-        return XDP_PASS;
+    __u32 ihl = ip->ihl * 4;
+    if (ihl < 20) return XDP_PASS;
 
-    __u16 sport = bpf_ntohs(sctp->source);
-    __u16 dport = bpf_ntohs(sctp->dest);
+    struct sctphdr *sctp = (void *)ip + ihl;
+    if ((void *)(sctp + 1) > data_end) return XDP_PASS;
 
-    if (sport == 38412 || dport == 38412) {
-        bpf_printk("NGAP SCTP packet sport=%d dport=%d\n", sport, dport);
-    }
+    bpf_printk("SCTP sport=%d dport=%d\n",
+               bpf_ntohs(sctp->source),
+               bpf_ntohs(sctp->dest));
+
 
     return XDP_PASS;
 }
