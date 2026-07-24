@@ -31,9 +31,10 @@ confusing missing-header error.
 
 ```sh
 cd amf/test
-make            # builds test_map_create, test_map_walk
+make            # builds test_map_create, test_map_walk, sm_use_case
 sudo ./test_map_create
 sudo ./test_map_walk
+sudo ./sm_use_case
 ```
 
 or, in one step:
@@ -46,6 +47,13 @@ Each binary prints one line per check it runs, `FAIL [test_name] file:line:
 condition` for anything that fails, and a final `N checks, M failed`
 summary. Exit code is `0` iff every check passed.
 
+> **Note on libbpf versions:** libbpf's low-level functions (`bpf_map_lookup_elem()`
+> and friends) return `-1` with `errno` set on libbpf < 1.0, but return the
+> negative errno directly (e.g. `-ENOENT`) on libbpf >= 1.0. `errno` is set
+> either way, so every "this lookup should miss" check here tests `ret != 0
+> && errno == ENOENT` rather than assuming `ret == -1` — don't reintroduce
+> a bare `== -1` check when adding new ones.
+
 ## Files
 
 | File               | Purpose                                                         |
@@ -55,6 +63,7 @@ summary. Exit code is `0` iff every check passed.
 | `fixtures.h`       | The real 29-node/52-edge FSM table, mirrored 1:1 from [`../amf_comm.c`](../amf_comm.c)'s `sm_node_data[]`/`sm_edge_data[]` (itself mirrored from `amf/amf_state_machine.py`). Testing against the actual production table, not a handful of hand-picked entries, is what would catch a regression like the table outgrowing `SM_NODE_MAP_MAX_ENTRIES`/`SM_EDGE_MAP_MAX_ENTRIES`. Keep in sync with `amf_comm.c` by inspection. |
 | `test_map_create.c`| eBPF map **creation** tests. |
 | `test_map_walk.c`  | eBPF hash map **population + visiting** tests. |
+| `sm_use_case.c`    | Narrated **use-case simulation** of `../README.md`'s registration + attack demo, against real, pinned maps left behind for inspection. |
 
 ## Test cases
 
@@ -117,3 +126,52 @@ dumping `sm_nodes`) would have to use.
 - **`test_delete_elem_removed_from_walk`** — deletes one entry with
   `bpf_map_delete_elem()`, confirms a direct lookup on it now misses, and
   confirms a subsequent walk visits exactly one fewer entry.
+
+### `sm_use_case` — use-case simulation (narrated demo)
+
+`test_map_create`/`test_map_walk` check individual behaviors and then throw
+their maps away (the fd closes, the anonymous map is destroyed) — good for
+"did it work?", useless for "what's actually in there?". `sm_use_case.c`
+exists to answer that: it plays out `../README.md`'s ["Demo: Detecting an
+Invalid State Transition"](../README.md#demo-detecting-an-invalid-state-transition)
+against real maps, prints every lookup it makes and what the kernel
+returned, and — unlike the other two binaries — **leaves its maps pinned**
+at `/sys/fs/bpf/sm_use_case_nodes` / `/sys/fs/bpf/sm_use_case_edges`
+afterward instead of closing/destroying them, so you can go look:
+
+```sh
+sudo bpftool map dump pinned /sys/fs/bpf/sm_use_case_nodes
+sudo bpftool map dump pinned /sys/fs/bpf/sm_use_case_edges
+```
+
+Run `make clean-pins` (or `sudo rm` the two paths above) when you're done —
+they are never auto-removed, by design. These pin paths are deliberately
+**not** `/sys/fs/bpf/sm_nodes`/`sm_edges` (the real production paths
+`sm_map.c` pins to), so running this demo can never clobber a real
+`amf_loader`/`amf_xdp.o` session on the same box.
+
+Nothing in the simulated timeline is hardcoded: `sm_use_case.c` walks a
+`current_state` variable forward, and at every step the **next** state
+printed is whatever `bpf_map_lookup_elem()` on the real, fixtures.h-populated
+`sm_edges` map returned for `(current_state, event_label)` — never a typed-in
+literal. The `event_label` sequence below is the simulated *input* (i.e.
+"here's the message that just arrived"), not the expected output.
+
+| Step | Simulated event | Label looked up | Expected outcome |
+|---|---|---|---|
+| T0 | `UE/gNB -> AMF` NGAP `InitialUEMessage` | `InitialUEMessage` | hit → `REG_RECEIVED` |
+| T1 | AMF validates the NAS envelope, starts a context lookup | `valid NAS` | hit → `CONTEXT_LOOKUP` |
+| T2 | No context found (first-time registration) → AMF requests identity | `context unavailable` | hit → `IDENTITY_PENDING` |
+| T3 | UE responds with its identity → AMF requests auth vectors | `identity available` | hit → `AUTH_VECTOR_PENDING` |
+| T4 | AUSF returns a valid vector → AMF begins NAS authentication | `AUSF success` | hit → `NAS_AUTHENTICATING` |
+| T5 **[ATTACK]** | Forged/replayed NAS `Security Mode Complete` arrives — but the AMF is still `NAS_AUTHENTICATING` and never sent a Security Mode Command for this UE | `Security Mode Complete` | **miss** (`Security Mode Complete` is a real edge, just not from `NAS_AUTHENTICATING`) → flagged, `ue_state[UE]` left unchanged |
+
+T5 is the same structural point the README's own demo makes: the label
+being replayed is a perfectly real edge in the FSM (`UE/gNB ->
+NAS_SECURITY_PENDING`), so a signature/label-only check would let it
+through. The composite `(from, label)` key `sm_edges` actually uses catches
+it anyway, because that exact pair was never inserted — detection is
+structural, not signature-based. A CHECK() backs this: T5 unexpectedly
+*hitting* (i.e. the attack sailing through) fails the test, same as any
+T0-T4 step unexpectedly *missing* (a real registration step being wrongly
+rejected) would.

@@ -14,14 +14,20 @@
 #                        (fixtures.h) and visits it via
 #                        bpf_map_get_next_key()/bpf_map_lookup_elem(),
 #                        plus point lookups and delete.
+#   sm_use_case        - narrates the README's "Detecting an Invalid State
+#                        Transition" demo end-to-end (T0-T4 normal
+#                        registration, T5 attack) against real, pinned
+#                        maps left behind for `bpftool map dump` afterward.
 
 CC       := cc
 CFLAGS   := -std=c11 -Wall -Wextra -Wno-unused-parameter
 LIBS     := -lbpf -lelf -lz
 
-BINS := test_map_create test_map_walk
+BINS := test_map_create test_map_walk sm_use_case
 
-.PHONY: test clean check-linux
+SM_USE_CASE_PINS := /sys/fs/bpf/sm_use_case_nodes /sys/fs/bpf/sm_use_case_edges
+
+.PHONY: test clean clean-pins check-linux
 
 check-linux:
 	@if [ "$$(uname -s)" != "Linux" ]; then \
@@ -48,5 +54,14 @@ test_map_create: test_map_create.c framework.h test_util.h ../sm_map.h
 test_map_walk: test_map_walk.c framework.h test_util.h fixtures.h ../sm_map.h
 	$(CC) $(CFLAGS) test_map_walk.c -o $@ $(LIBS)
 
+sm_use_case: sm_use_case.c framework.h test_util.h fixtures.h ../sm_map.h
+	$(CC) $(CFLAGS) sm_use_case.c -o $@ $(LIBS)
+
 clean:
 	rm -f $(BINS)
+
+# sm_use_case deliberately leaves its maps pinned at bpffs after running
+# (see its file header comment) so they can be inspected with `bpftool
+# map dump pinned ...`; this removes them once you're done looking.
+clean-pins:
+	sudo rm -f $(SM_USE_CASE_PINS)

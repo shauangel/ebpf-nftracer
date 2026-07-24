@@ -1,6 +1,5 @@
 // sm_map.c — the 23-state (+6 endpoint) threat-aware AMF FSM, stored as
-// two CO-RE eBPF hash maps (BPF_MAP_TYPE_HASH):
-//
+// two eBPF hash maps (BPF_MAP_TYPE_HASH):
 //   sm_nodes   node name                    -> kind (normal/failure/endpoint)
 //   sm_edges   (from state, event label)    -> to state
 //
@@ -20,9 +19,8 @@
 // BPF object.
 //
 // A BPF_MAP_TYPE_HASH has no static-initializer mechanism -- both maps
-// start EMPTY at program load. The 29 nodes / 52 edges (mirrored from
-// amf/amf_state_machine.py) are inserted at runtime by the userspace
-// loader via bpf_map__update_elem(); see sm_map_populate() in
+// start EMPTY at program load. The nodes/edges are inserted at runtime by 
+// the userspace loader via bpf_map__update_elem(); see sm_map_populate() in
 // amf_comm.c/amf_comm.h, called once from amf_loader.c right after
 // amf_tracer_bpf__open_and_load().
 
