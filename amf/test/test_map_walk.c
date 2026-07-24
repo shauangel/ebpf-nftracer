@@ -236,7 +236,11 @@ static void test_point_lookup_known_entries(void)
     snprintf(bogus.from, sizeof(bogus.from), "%s", "NAS_SECURITY_PENDING");
     snprintf(bogus.label, sizeof(bogus.label), "%s", "replay/abnormal retry");
     struct sm_edge_val bogus_val = {};
-    CHECK(bpf_map_lookup_elem(efd, &bogus, &bogus_val) == -1 && errno == ENOENT);
+    /* libbpf's low-level bpf_map_lookup_elem() returns -1 with errno set
+     * on pre-1.0 libbpf, but returns the negative errno directly (e.g.
+     * -ENOENT) on libbpf >= 1.0 -- errno is set either way (see
+     * libbpf_err()), so check that instead of assuming -1. */
+    CHECK(bpf_map_lookup_elem(efd, &bogus, &bogus_val) != 0 && errno == ENOENT);
 
     close(nfd);
     close(efd);
@@ -254,7 +258,7 @@ static void test_delete_elem_removed_from_walk(void)
     CHECK(bpf_map_delete_elem(fd, &key) == 0);
 
     struct sm_node_val val = {};
-    CHECK(bpf_map_lookup_elem(fd, &key, &val) == -1 && errno == ENOENT);
+    CHECK(bpf_map_lookup_elem(fd, &key, &val) != 0 && errno == ENOENT);
 
     struct node_walk_ctx ctx = {0};
     int count = walk_nodes(fd, verify_node_visit, &ctx);

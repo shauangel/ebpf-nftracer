@@ -2,9 +2,7 @@
 
 #include "amf_comm.h"
 
-/* ── sm_map population (userspace side of sm_map.c's BPF hash maps) ──────
- * Node/edge data transcribed 1:1 from amf/amf_state_machine.py; keep the
- * two in sync by inspection. */
+/* ────── sm_map population (userspace state machine definitions for eBPF hash maps) ────── */
 
 struct sm_node_def { const char *name; enum sm_node_kind kind; };
 
@@ -141,6 +139,8 @@ int sm_map_populate(struct amf_tracer_bpf *skel)
     return 0;
 }
 
+/* ────── Uprobes attach/detach ────── */
+
 int attach_programs(struct amf_tracer_bpf *skel, const char *bin_path, pid_t pid, struct attach_target *targets, int cnt)
 {
     for (int i = 0; i < cnt; i++) {
@@ -167,7 +167,6 @@ int attach_programs(struct amf_tracer_bpf *skel, const char *bin_path, pid_t pid
     return 0;
 }
 
-
 void detach_programs(struct attach_target *targets, int cnt)
 {
     for (int i = 0; i < cnt; i++) {
@@ -179,7 +178,7 @@ void detach_programs(struct attach_target *targets, int cnt)
 }
 
 
-/* ── Tracepoint attach / detach (new) ───────────────────────────────────── */
+/* ────── Tracepoint attach/detach ────── */
 
 int attach_tracepoints(struct amf_tracer_bpf *skel,
                        struct tp_target       *targets,

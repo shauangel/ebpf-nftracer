@@ -92,7 +92,11 @@ static void test_independent_creations_are_distinct_maps(void)
 
     struct sm_node_val out = {};
     CHECK(bpf_map_lookup_elem(fd1, &key, &out) == 0);
-    CHECK(bpf_map_lookup_elem(fd2, &key, &out) == -1 && errno == ENOENT);
+    /* libbpf's low-level bpf_map_lookup_elem() returns -1 with errno set
+     * on pre-1.0 libbpf, but returns the negative errno directly (e.g.
+     * -ENOENT) on libbpf >= 1.0 -- errno is set either way (see
+     * libbpf_err()), so check that instead of assuming -1. */
+    CHECK(bpf_map_lookup_elem(fd2, &key, &out) != 0 && errno == ENOENT);
 
     close(fd1);
     close(fd2);
