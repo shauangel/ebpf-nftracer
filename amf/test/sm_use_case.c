@@ -1,38 +1,12 @@
 /*
- * sm_use_case.c — end-to-end USE-CASE simulation of the walk-through in
- * ../README.md's "Demo: Detecting an Invalid State Transition" section:
+ * End-to-end use case simulation of the walk-through in
+ * ../README.md's toy demo:
  * a UE registers normally (T0-T4), then an attacker replays a forged NAS
  * message out of sequence (T5) and the FSM catches it.
  *
- * Unlike test_map_create.c/test_map_walk.c (which check individual
- * behaviors in isolation), this file is meant to be READ while it runs:
- * every step prints the (from, label) it looked up and the (to) the real
- * kernel map returned, so a human watching stdout sees the same UE
- * registration walk the README describes, against REAL data. It still
- * uses framework.h's CHECK() underneath, so it doubles as a regression
- * test with a normal pass/fail exit code.
- *
- * Nothing here is hardcoded: every "next state" printed comes from an
- * actual bpf_map_lookup_elem() on a real BPF_MAP_TYPE_HASH populated with
- * the exact 29-node/52-edge production table (fixtures.h). The sequence
- * of (from, label) pairs below is the simulated INPUT (i.e. "here is the
- * NGAP/NAS message that just arrived") -- it is not the expected output.
- *
- * Difference from test_map_create.c/test_map_walk.c: this program PINS
- * its maps (see SM_USE_CASE_NODES_PIN/SM_USE_CASE_EDGES_PIN below) and
- * does NOT unpin them when it exits, specifically so that after the run
- * you can inspect the exact state the FSM ended up in with:
- *
+ * Inspect the exact state the FSM ended up in with:
  *   sudo bpftool map dump pinned /sys/fs/bpf/sm_use_case_nodes
  *   sudo bpftool map dump pinned /sys/fs/bpf/sm_use_case_edges
- *
- * (test_map_create.c/test_map_walk.c close their fds at the end of each
- * test, which destroys the underlying kernel map immediately -- fine for
- * checking behavior, useless if you actually want to go look at what
- * ended up in the map afterward.)
- *
- * Requires Linux + CONFIG_BPF_SYSCALL, libbpf, root, and bpffs mounted at
- * /sys/fs/bpf -- same requirements as test_map_create.c's pin test.
  */
 
 #include <errno.h>    /* errno, ENOENT -- to tell "no such edge" apart from a real error */
@@ -47,10 +21,7 @@
 #include "fixtures.h"   /* fx_populate_nodes()/fx_populate_edges() -- the real 29/52-entry FSM table */
 #include "../sm_map.h"  /* struct sm_node_key/val, struct sm_edge_key/val, SM_NAME_MAX, SM_LABEL_MAX */
 
-/* Pin paths this demo uses -- deliberately NOT /sys/fs/bpf/sm_nodes /
- * /sys/fs/bpf/sm_edges (the real production paths sm_map.c pins to), so
- * running this demo can never clobber a real amf_loader/amf_xdp session
- * that happens to be running on the same box. */
+/* Pin paths this demo uses */
 #define SM_USE_CASE_NODES_PIN "/sys/fs/bpf/sm_use_case_nodes"
 #define SM_USE_CASE_EDGES_PIN "/sys/fs/bpf/sm_use_case_edges"
 

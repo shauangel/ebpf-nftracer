@@ -4,7 +4,8 @@
 # the mock-based suite this replaced, this one only builds/runs on Linux
 # with CONFIG_BPF_SYSCALL and libbpf-dev installed, and the resulting
 # binaries must be run as root (CAP_BPF/CAP_SYS_ADMIN) since they exercise
-# the real bpf() syscall. See README.md for details on each test case.
+# the real bpf() syscall. See map_test.md / xdp_test.md for details on
+# each test case.
 #
 #   test_map_create   - creates sm_nodes/sm_edges with sm_map.h's exact
 #                        layout, checks kernel-reported map info, capacity
@@ -18,12 +19,21 @@
 #                        Transition" demo end-to-end (T0-T4 normal
 #                        registration, T5 attack) against real, pinned
 #                        maps left behind for `bpftool map dump` afterward.
+#   test_xdp           - loads the real ../amf_xdp.c (built here as
+#                        amf_xdp.o, see the amf_xdp.o rule below) and
+#                        drives it with BPF_PROG_TEST_RUN against
+#                        hand-built SCTP/NGAP and HTTP packets -- no veth
+#                        or network namespace needed. See xdp_test.md.
 
 CC       := cc
 CFLAGS   := -std=c11 -Wall -Wextra -Wno-unused-parameter
 LIBS     := -lbpf -lelf -lz
 
-BINS := test_map_create test_map_walk sm_use_case
+CLANG      := clang
+ARCH       := $(shell uname -m | sed 's/x86_64/x86/')
+BPF_CFLAGS := -O2 -g -target bpf -D__TARGET_ARCH_$(ARCH)
+
+BINS := test_map_create test_map_walk sm_use_case test_xdp
 
 SM_USE_CASE_PINS := /sys/fs/bpf/sm_use_case_nodes /sys/fs/bpf/sm_use_case_edges
 
@@ -57,8 +67,20 @@ test_map_walk: test_map_walk.c framework.h test_util.h fixtures.h ../sm_map.h
 sm_use_case: sm_use_case.c framework.h test_util.h fixtures.h ../sm_map.h
 	$(CC) $(CFLAGS) sm_use_case.c -o $@ $(LIBS)
 
+test_xdp: test_xdp.c framework.h test_util.h fixtures.h ../sm_map.h amf_xdp.o
+	$(CC) $(CFLAGS) test_xdp.c -o $@ $(LIBS)
+
+# amf_xdp.o is a real compiled BPF object -- NOT linked into test_xdp,
+# loaded at RUNTIME via bpf_object__open_file(). ../amf_xdp.c has never
+# had a build rule of its own (see its header comment: historically
+# hand-compiled with the command documented in ../README.md); this rule
+# builds it HERE, into amf/test/, so nothing is written into ../ (the
+# parent amf/ directory).
+amf_xdp.o: ../amf_xdp.c ../sm_map.c ../sm_map.h ../../vmlinux.h
+	$(CLANG) $(BPF_CFLAGS) -I.. -I../.. -c ../amf_xdp.c -o $@
+
 clean:
-	rm -f $(BINS)
+	rm -f $(BINS) amf_xdp.o
 
 # sm_use_case deliberately leaves its maps pinned at bpffs after running
 # (see its file header comment) so they can be inspected with `bpftool
