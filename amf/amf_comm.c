@@ -1,15 +1,107 @@
 #include <stdio.h>
 
 #include "amf_comm.h"
-#include "sm_map_data.h"
 
 /* ── sm_map population (userspace side of sm_map.c's BPF hash maps) ──────
- * Node/edge data lives in sm_map_data.c (sm_node_data/sm_edge_data,
- * shared with amf/test/'s unit tests) -- see sm_map_data.h. */
+ * Node/edge data transcribed 1:1 from amf/amf_state_machine.py; keep the
+ * two in sync by inspection. */
+
+struct sm_node_def { const char *name; enum sm_node_kind kind; };
+
+static const struct sm_node_def sm_node_data[] = {
+    { "REG_RECEIVED",             SM_KIND_NORMAL },
+    { "CONTEXT_LOOKUP",           SM_KIND_NORMAL },
+    { "IDENTITY_PENDING",         SM_KIND_NORMAL },
+    { "AUTH_VECTOR_PENDING",      SM_KIND_NORMAL },
+    { "NAS_AUTHENTICATING",       SM_KIND_NORMAL },
+    { "NAS_SECURITY_PENDING",     SM_KIND_NORMAL },
+    { "UDM_REGISTERING",          SM_KIND_NORMAL },
+    { "SUBSCRIPTION_LOADING",     SM_KIND_NORMAL },
+    { "POLICY_ASSOCIATING",       SM_KIND_NORMAL },
+    { "UE_CONTEXT_READY",         SM_KIND_NORMAL },
+    { "SM_CONTEXT_PENDING",       SM_KIND_NORMAL },
+    { "INITIAL_CONTEXT_SETUP",    SM_KIND_NORMAL },
+    { "REGISTERED_CONNECTED",     SM_KIND_NORMAL },
+
+    { "REG_REJECTED",             SM_KIND_FAILURE },
+    { "AUTH_FAILED",              SM_KIND_FAILURE },
+    { "REPLAY_SUSPECTED",         SM_KIND_FAILURE },
+    { "SECURITY_FAILED",          SM_KIND_FAILURE },
+    { "SECURITY_POLICY_VIOLATION",SM_KIND_FAILURE },
+    { "NF_TIMEOUT",               SM_KIND_FAILURE },
+    { "SLICE_REJECTED",           SM_KIND_FAILURE },
+    { "PDU_SESSION_REJECTED",     SM_KIND_FAILURE },
+    { "CONTEXT_SETUP_FAILED",     SM_KIND_FAILURE },
+    { "CLEANUP_REQUIRED",         SM_KIND_FAILURE },
+
+    { "UE/gNB", SM_KIND_ENDPOINT },
+    { "AMF",    SM_KIND_ENDPOINT },
+    { "AUSF",   SM_KIND_ENDPOINT },
+    { "UDM",    SM_KIND_ENDPOINT },
+    { "PCF",    SM_KIND_ENDPOINT },
+    { "SMF",    SM_KIND_ENDPOINT },
+};
+
+struct sm_edge_def { const char *from, *to, *label; };
+
+static const struct sm_edge_def sm_edge_data[] = {
+    { "UE/gNB",                "REG_RECEIVED",           "InitialUEMessage" },
+    { "REG_RECEIVED",          "CONTEXT_LOOKUP",         "valid NAS" },
+    { "REG_RECEIVED",          "REG_REJECTED",           "invalid NAS" },
+    { "CONTEXT_LOOKUP",        "AMF",                    "Namf ContextTransfer" },
+    { "AMF",                   "CONTEXT_LOOKUP",         "response" },
+    { "CONTEXT_LOOKUP",        "IDENTITY_PENDING",       "context unavailable" },
+    { "IDENTITY_PENDING",      "UE/gNB",                 "Request identity" },
+    { "UE/gNB",                "IDENTITY_PENDING",       "Response identity" },
+    { "IDENTITY_PENDING",      "AUTH_VECTOR_PENDING",    "identity available" },
+    { "AUTH_VECTOR_PENDING",   "AUSF",                   "Nausf Authentication" },
+    { "AUSF",                  "AUTH_VECTOR_PENDING",    "auth vector response" },
+    { "AUTH_VECTOR_PENDING",   "NAS_AUTHENTICATING",     "AUSF success" },
+    { "AUTH_VECTOR_PENDING",   "AUTH_FAILED",            "AUSF reject" },
+    { "AUTH_VECTOR_PENDING",   "NF_TIMEOUT",             "timeout" },
+    { "NAS_AUTHENTICATING",    "UE/gNB",                 "NAS Authentication" },
+    { "NAS_AUTHENTICATING",    "NAS_SECURITY_PENDING",   "RES* valid" },
+    { "NAS_AUTHENTICATING",    "AUTH_FAILED",            "RES* invalid" },
+    { "NAS_AUTHENTICATING",    "REPLAY_SUSPECTED",       "replay/abnormal retry" },
+    { "NAS_SECURITY_PENDING",  "UE/gNB",                 "Security Mode Command" },
+    { "UE/gNB",                "NAS_SECURITY_PENDING",   "Security Mode Complete" },
+    { "NAS_SECURITY_PENDING",  "UDM_REGISTERING",        "integrity success" },
+    { "NAS_SECURITY_PENDING",  "SECURITY_FAILED",        "integrity fail" },
+    { "NAS_SECURITY_PENDING",  "SECURITY_POLICY_VIOLATION", "NULL/invalid algorithm" },
+    { "UDM_REGISTERING",       "UDM",                    "Nudm UECM Registration" },
+    { "UDM",                   "UDM_REGISTERING",        "registration response" },
+    { "UDM_REGISTERING",       "SUBSCRIPTION_LOADING",   "success" },
+    { "UDM_REGISTERING",       "REG_REJECTED",           "UDM reject" },
+    { "UDM_REGISTERING",       "NF_TIMEOUT",             "timeout" },
+    { "SUBSCRIPTION_LOADING",  "UDM",                    "Nudm SDM Get" },
+    { "UDM",                   "SUBSCRIPTION_LOADING",   "subscription data" },
+    { "SUBSCRIPTION_LOADING",  "POLICY_ASSOCIATING",     "valid subscription" },
+    { "SUBSCRIPTION_LOADING",  "SLICE_REJECTED",         "invalid S-NSSAI" },
+    { "POLICY_ASSOCIATING",    "PCF",                    "Npcf AM Policy Create" },
+    { "PCF",                   "POLICY_ASSOCIATING",     "policy response" },
+    { "POLICY_ASSOCIATING",    "UE_CONTEXT_READY",       "policy success" },
+    { "POLICY_ASSOCIATING",    "REG_REJECTED",           "policy reject" },
+    { "POLICY_ASSOCIATING",    "NF_TIMEOUT",             "timeout" },
+    { "UE_CONTEXT_READY",      "SM_CONTEXT_PENDING",     "PDU session request" },
+    { "SM_CONTEXT_PENDING",    "SMF",                    "Nsmf Create/Update SM Context" },
+    { "SMF",                   "SM_CONTEXT_PENDING",     "SM context response" },
+    { "SM_CONTEXT_PENDING",    "INITIAL_CONTEXT_SETUP",  "SMF success" },
+    { "SM_CONTEXT_PENDING",    "PDU_SESSION_REJECTED",   "SMF reject" },
+    { "SM_CONTEXT_PENDING",    "SLICE_REJECTED",         "slice validation failure" },
+    { "INITIAL_CONTEXT_SETUP", "UE/gNB",                 "InitialContextSetupRequest" },
+    { "UE/gNB",                "INITIAL_CONTEXT_SETUP",  "setup response" },
+    { "INITIAL_CONTEXT_SETUP", "REGISTERED_CONNECTED",   "setup success" },
+    { "INITIAL_CONTEXT_SETUP", "CONTEXT_SETUP_FAILED",   "setup failure" },
+    { "AUTH_FAILED",           "CLEANUP_REQUIRED",       "release partial context" },
+    { "SECURITY_FAILED",       "CLEANUP_REQUIRED",       "release partial context" },
+    { "REG_REJECTED",          "CLEANUP_REQUIRED",       "cleanup" },
+    { "PDU_SESSION_REJECTED",  "UE_CONTEXT_READY",       "retain UE context" },
+    { "CONTEXT_SETUP_FAILED",  "CLEANUP_REQUIRED",       "release resources" },
+};
 
 int sm_map_populate(struct amf_tracer_bpf *skel)
 {
-    for (size_t i = 0; i < sm_node_data_count; i++) {
+    for (size_t i = 0; i < sizeof(sm_node_data) / sizeof(sm_node_data[0]); i++) {
         struct sm_node_key key = {};
         struct sm_node_val val = {};
         snprintf(key.name, sizeof(key.name), "%s", sm_node_data[i].name);
@@ -25,7 +117,7 @@ int sm_map_populate(struct amf_tracer_bpf *skel)
         }
     }
 
-    for (size_t i = 0; i < sm_edge_data_count; i++) {
+    for (size_t i = 0; i < sizeof(sm_edge_data) / sizeof(sm_edge_data[0]); i++) {
         const struct sm_edge_def *ed = &sm_edge_data[i];
         struct sm_edge_key key = {};
         struct sm_edge_val val = {};
@@ -44,7 +136,8 @@ int sm_map_populate(struct amf_tracer_bpf *skel)
     }
 
     printf("    sm_map: %zu nodes, %zu edges loaded\n",
-           sm_node_data_count, sm_edge_data_count);
+           sizeof(sm_node_data) / sizeof(sm_node_data[0]),
+           sizeof(sm_edge_data) / sizeof(sm_edge_data[0]));
     return 0;
 }
 

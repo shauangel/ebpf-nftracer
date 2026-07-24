@@ -1,25 +1,40 @@
-# amf/test/Makefile — host-side unit tests. No BPF toolchain, no libbpf,
-# no root: everything here compiles and runs on any plain C toolchain.
+# amf/test/Makefile — real eBPF tests for sm_map.c's sm_nodes/sm_edges
+# BPF_MAP_TYPE_HASH maps. Unlike a host-side unit test, these create,
+# populate, and iterate ACTUAL kernel BPF maps via libbpf -- so, unlike
+# the mock-based suite this replaced, this one only builds/runs on Linux
+# with CONFIG_BPF_SYSCALL and libbpf-dev installed, and the resulting
+# binaries must be run as root (CAP_BPF/CAP_SYS_ADMIN) since they exercise
+# the real bpf() syscall. See README.md for details on each test case.
 #
-#   test_sm_map        - sm_map.c's own logic (key encoding, lookups),
-#                         small hand-written fixtures.
-#   test_sm_map_data   - data-integrity checks on the REAL FSM table
-#                         (sm_map_data.c) that amf_comm.c actually loads.
-#   test_sm_fsm_walk   - real sm_map.c logic + real sm_map_data.c table,
-#                         walking actual FSM state transitions.
-#
-# test_sm_map.c/test_sm_fsm_walk.c #include sm_map.c directly (see
-# shim/bpf/bpf_helpers.h for why) rather than linking against a built
-# object, so this suite is independent of the top-level Makefile.
+#   test_map_create   - creates sm_nodes/sm_edges with sm_map.h's exact
+#                        layout, checks kernel-reported map info, capacity
+#                        enforcement, and the pin/reopen sharing mechanism
+#                        sm_map.c depends on.
+#   test_map_walk     - populates the real 29-node/52-edge FSM table
+#                        (fixtures.h) and visits it via
+#                        bpf_map_get_next_key()/bpf_map_lookup_elem(),
+#                        plus point lookups and delete.
 
 CC       := cc
-CFLAGS   := -std=c11 -Wall -Wextra -Wno-unknown-attributes -Wno-unused-parameter -Ishim
+CFLAGS   := -std=c11 -Wall -Wextra -Wno-unused-parameter
+LIBS     := -lbpf -lelf -lz
 
-.PHONY: test clean
+BINS := test_map_create test_map_walk
 
-BINS := test_sm_map.bin test_sm_map_data.bin test_sm_fsm_walk.bin
+.PHONY: test clean check-linux
 
-test: $(BINS)
+check-linux:
+	@if [ "$$(uname -s)" != "Linux" ]; then \
+		echo "amf/test requires Linux + eBPF (bpf() syscall); refusing to build on $$(uname -s)."; \
+		exit 1; \
+	fi
+
+# Builds the binaries and runs them. Each binary checks for root itself
+# (see require_root() in test_util.h) and prints a clear message instead
+# of reporting misleading EPERM failures per-check; run as
+# `sudo make test` (or build with `make`, then `sudo ./test_map_create`
+# etc.) on a real target machine.
+test: check-linux $(BINS)
 	@status=0; \
 	for t in $(BINS); do \
 		echo "== $$t =="; \
@@ -27,14 +42,11 @@ test: $(BINS)
 	done; \
 	exit $$status
 
-test_sm_map.bin: test_sm_map.c shim/bpf/bpf_helpers.h framework.h ../sm_map.c ../sm_map.h
-	$(CC) $(CFLAGS) test_sm_map.c -o $@
+test_map_create: test_map_create.c framework.h test_util.h ../sm_map.h
+	$(CC) $(CFLAGS) test_map_create.c -o $@ $(LIBS)
 
-test_sm_map_data.bin: test_sm_map_data.c framework.h ../sm_map_data.c ../sm_map_data.h ../sm_map.h
-	$(CC) $(CFLAGS) test_sm_map_data.c ../sm_map_data.c -o $@
-
-test_sm_fsm_walk.bin: test_sm_fsm_walk.c shim/bpf/bpf_helpers.h framework.h ../sm_map.c ../sm_map.h ../sm_map_data.c ../sm_map_data.h
-	$(CC) $(CFLAGS) test_sm_fsm_walk.c ../sm_map_data.c -o $@
+test_map_walk: test_map_walk.c framework.h test_util.h fixtures.h ../sm_map.h
+	$(CC) $(CFLAGS) test_map_walk.c -o $@ $(LIBS)
 
 clean:
 	rm -f $(BINS)

@@ -3,10 +3,10 @@
 
 /*
  * framework.h — minimal, dependency-free test harness shared by every
- * amf/test/test_*.c file. No external test library: this project's tests
- * run on a bare host toolchain (no libbpf, no kernel), so pulling in e.g.
- * Unity/CMocka would just be one more thing to install for no real gain
- * at this size.
+ * amf/test/test_*.c file. No external test library: at this size,
+ * pulling in e.g. Unity/CMocka on top of the libbpf dependency these
+ * tests already require would be one more thing to install for no real
+ * gain.
  */
 
 #include <stdio.h>

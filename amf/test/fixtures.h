@@ -1,10 +1,32 @@
-#include "sm_map_data.h"
+#ifndef AMF_TEST_FIXTURES_H
+#define AMF_TEST_FIXTURES_H
 
-/* Node/edge data transcribed 1:1 from amf/amf_state_machine.py; keep the
- * two in sync by inspection. See sm_map_data.h for why this lives in its
- * own translation unit. */
+/*
+ * fixtures.h — the REAL 29-node/52-edge threat-aware AMF FSM table,
+ * mirrored 1:1 from amf_comm.c's sm_node_data[]/sm_edge_data[] (itself
+ * mirrored from amf/amf_state_machine.py -- see amf_comm.c's own comment
+ * on keeping the two in sync by inspection). Testing map creation/walking
+ * against this exact table, rather than a handful of hand-picked entries,
+ * is what would actually catch a regression like the table growing past
+ * SM_NODE_MAP_MAX_ENTRIES/SM_EDGE_MAP_MAX_ENTRIES (see
+ * test_map_create.c's capacity test).
+ *
+ * Keep in sync with amf_comm.c's sm_node_data[]/sm_edge_data[] by
+ * inspection, same convention amf_comm.c itself uses for
+ * amf_state_machine.py.
+ */
 
-const struct sm_node_def sm_node_data[] = {
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+
+#include <bpf/bpf.h>
+
+#include "../sm_map.h"
+
+struct sm_node_def { const char *name; enum sm_node_kind kind; };
+
+static const struct sm_node_def fx_nodes[] = {
     { "REG_RECEIVED",             SM_KIND_NORMAL },
     { "CONTEXT_LOOKUP",           SM_KIND_NORMAL },
     { "IDENTITY_PENDING",         SM_KIND_NORMAL },
@@ -37,9 +59,10 @@ const struct sm_node_def sm_node_data[] = {
     { "PCF",    SM_KIND_ENDPOINT },
     { "SMF",    SM_KIND_ENDPOINT },
 };
-const size_t sm_node_data_count = sizeof(sm_node_data) / sizeof(sm_node_data[0]);
 
-const struct sm_edge_def sm_edge_data[] = {
+struct sm_edge_def { const char *from, *to, *label; };
+
+static const struct sm_edge_def fx_edges[] = {
     { "UE/gNB",                "REG_RECEIVED",           "InitialUEMessage" },
     { "REG_RECEIVED",          "CONTEXT_LOOKUP",         "valid NAS" },
     { "REG_RECEIVED",          "REG_REJECTED",           "invalid NAS" },
@@ -93,4 +116,53 @@ const struct sm_edge_def sm_edge_data[] = {
     { "PDU_SESSION_REJECTED",  "UE_CONTEXT_READY",       "retain UE context" },
     { "CONTEXT_SETUP_FAILED",  "CLEANUP_REQUIRED",       "release resources" },
 };
-const size_t sm_edge_data_count = sizeof(sm_edge_data) / sizeof(sm_edge_data[0]);
+
+#define FX_NODE_COUNT (sizeof(fx_nodes) / sizeof(fx_nodes[0]))
+#define FX_EDGE_COUNT (sizeof(fx_edges) / sizeof(fx_edges[0]))
+
+static inline const struct sm_node_def *fx_find_node(const char *name)
+{
+    for (size_t i = 0; i < FX_NODE_COUNT; i++)
+        if (strcmp(fx_nodes[i].name, name) == 0)
+            return &fx_nodes[i];
+    return NULL;
+}
+
+/* Load every fx_nodes[] entry into a real sm_nodes map fd, exactly the
+ * way amf_comm.c's sm_map_populate() loads it into the production
+ * skeleton's map -- snprintf into a zero-initialized key, then
+ * bpf_map_update_elem(). Returns 0 on success, the first non-zero
+ * bpf_map_update_elem() return value otherwise. */
+static inline int fx_populate_nodes(int fd)
+{
+    for (size_t i = 0; i < FX_NODE_COUNT; i++) {
+        struct sm_node_key key = {};
+        struct sm_node_val val = {};
+        snprintf(key.name, sizeof(key.name), "%s", fx_nodes[i].name);
+        val.kind = (__u8)fx_nodes[i].kind;
+
+        int err = bpf_map_update_elem(fd, &key, &val, BPF_ANY);
+        if (err)
+            return err;
+    }
+    return 0;
+}
+
+static inline int fx_populate_edges(int fd)
+{
+    for (size_t i = 0; i < FX_EDGE_COUNT; i++) {
+        const struct sm_edge_def *ed = &fx_edges[i];
+        struct sm_edge_key key = {};
+        struct sm_edge_val val = {};
+        snprintf(key.from,  sizeof(key.from),  "%s", ed->from);
+        snprintf(key.label, sizeof(key.label), "%s", ed->label);
+        snprintf(val.to,    sizeof(val.to),    "%s", ed->to);
+
+        int err = bpf_map_update_elem(fd, &key, &val, BPF_ANY);
+        if (err)
+            return err;
+    }
+    return 0;
+}
+
+#endif /* AMF_TEST_FIXTURES_H */

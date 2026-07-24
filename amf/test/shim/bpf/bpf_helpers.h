@@ -1,24 +1,22 @@
-#ifndef MOCK_BPF_HELPERS_H
-#define MOCK_BPF_HELPERS_H
+#ifndef MOCK_BPF_H
+#define MOCK_BPF_H
 
 /*
- * shim/bpf/bpf_helpers.h — host-side stand-in for the real
- * <bpf/bpf_helpers.h>, used ONLY to unit test sm_map.c on a plain
- * userspace toolchain (no clang -target bpf, no libbpf, no root, no
- * kernel). Found transparently: sm_map.c does `#include <bpf/bpf_helpers.h>`
- * and the test Makefile puts this shim/ directory on -I ahead of anything
- * else providing that path, so this file resolves instead of the real one.
+ * mock_bpf.h — host-side stand-in for <bpf/bpf_helpers.h>, used ONLY to
+ * unit test sm_map.c on a plain userspace toolchain (no clang -target bpf,
+ * no libbpf, no root, no kernel).
  *
- * sm_map.c also does `#include "../vmlinux.h"` first -- a quoted relative
- * include, which always resolves straight to the real repo-root vmlinux.h
- * regardless of -I. That's fine: it's pure typedefs/structs/enums (no
- * BPF-target-specific syntax), including enum bpf_map_type (so
- * BPF_MAP_TYPE_HASH needs no shim), so it compiles as-is with a normal
- * host clang/gcc. What's actually missing without libbpf installed is
- * just the SEC()/__uint()/__type() map-definition macros and the
- * bpf_map_lookup_elem() helper -- supplied below, matching libbpf's own
- * definitions closely enough that sm_nodes/sm_edges remain ordinary (if
- * functionally inert) global structs.
+ * sm_map.c is #include'd directly (never linked) by test_sm_map.c after
+ * this header. Its own "../vmlinux.h" include resolves to the real
+ * repo-root vmlinux.h (a quoted relative include always wins over -I), and
+ * that already defines every kernel BTF type sm_map.c needs (including
+ * enum bpf_map_type, i.e. BPF_MAP_TYPE_HASH) -- pure typedefs/structs, no
+ * BPF-target-specific syntax, so it compiles fine with a normal host
+ * clang/gcc. What's missing on a machine without libbpf installed is just
+ * the SEC()/__uint()/__type() map-definition macros and the
+ * bpf_map_lookup_elem() helper -- this header supplies those, matching
+ * libbpf's own definitions closely enough that sm_nodes/sm_edges remain
+ * ordinary (if functionally inert) global structs.
  *
  * bpf_map_lookup_elem() itself is only PROTOTYPED here; test_sm_map.c
  * defines its body after including sm_map.c, once sm_nodes/sm_edges exist
@@ -40,7 +38,7 @@
 #define __uint(name, val) int (*name)[val]
 #endif
 #ifndef __type
-#define __type(name, val) __typeof__(val) *name
+#define __type(name, val) typeof(val) *name
 #endif
 
 #ifndef LIBBPF_PIN_BY_NAME
@@ -49,4 +47,4 @@
 
 void *bpf_map_lookup_elem(void *map, const void *key);
 
-#endif /* MOCK_BPF_HELPERS_H */
+#endif /* MOCK_BPF_H */
