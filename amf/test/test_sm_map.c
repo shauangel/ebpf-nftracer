@@ -11,12 +11,11 @@
  * bpf_map_lookup_elem() it prototypes is implemented below, backed by a
  * couple of plain arrays instead of a real kernel BPF_MAP_TYPE_HASH.
  *
- * Scope: sm_map.c's own logic only. The 29-node/52-edge FSM data table
- * itself lives in amf_comm.c (sm_node_data/sm_edge_data) and isn't
- * exercised here -- amf_comm.c pulls in amf_comm.h -> amf_tracer.skel.h
- * -> <bpf/libbpf.h>, which requires libbpf installed and isn't available
- * on every dev machine. Small, explicit fixtures are used instead, one
- * per test, rather than replaying the full production table.
+ * Scope: sm_map.c's own logic only, exercised with small, explicit
+ * per-test fixtures rather than the full production table. For the real
+ * 29-node/52-edge table (sm_map_data.c) see test_sm_map_data.c
+ * (data-integrity checks) and test_sm_fsm_walk.c (real logic + real data
+ * together, walking actual FSM paths).
  *
  * shim/bpf/bpf_helpers.h (found via -I, see Makefile) supplies the
  * SEC()/__uint()/__type()/bpf_map_lookup_elem() pieces sm_map.c itself

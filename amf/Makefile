@@ -17,7 +17,7 @@ BPF_SRC         := $(NF)_tracer.bpf.c
 BPF_OBJ         := $(NF)_tracer.bpf.o
 SKEL_HDR        := $(NF)_tracer.skel.h
 
-USER_SRCS       := $(NF)_loader.c $(NF)_comm.c $(NF)_functions.c
+USER_SRCS       := $(NF)_loader.c $(NF)_comm.c $(NF)_functions.c sm_map_data.c
 USER_OBJS       := $(USER_SRCS:.c=.o)
 
 COMMON_OBJ      := ../common.o
