@@ -1,85 +1,88 @@
-# amf/test/test_xdp.c — testing `../amf_xdp.c`
+# amf/test/test_xdp.c — live monitor for `../amf_xdp.c`
 
-`test_xdp.c` is a **loader** for `../amf_xdp.c`: it compiles it into a real
-BPF object (`amf_xdp.o`), loads it into the kernel with libbpf, and drives
-it with the kernel's `BPF_PROG_TEST_RUN` facility against hand-built raw
-packets — no veth pair, no network namespace, no real NIC. This is the same
-technique the kernel's own BPF selftests use to unit-test XDP programs in
-isolation. See [`map_test.md`](map_test.md) for the `sm_nodes`/`sm_edges`
-map tests this one builds on.
+`test_xdp.c` is a small **live monitor**, not an automated pass/fail test:
+it loads the real, compiled `amf_xdp.o`, attaches `amf_xdp_enforce()` as an
+actual XDP program on a real interface, and once a second prints
+`amf_xdp_stats` (`PASS`/`DROP`/`STATE_INVALID`) and every entry in
+`ue_state_map`, until you hit Ctrl+C. See [`doc_map_test.md`](doc_map_test.md)
+for the `sm_nodes`/`sm_edges` map tests this builds on.
 
-**What's being tested:** `amf_xdp_enforce()` must be able to tell an
-SCTP/NGAP packet (the only traffic it's meant to inspect — see
-`../amf_xdp.c`'s file header) apart from ordinary HTTP-over-TCP traffic,
-which must sail through completely untouched ("fail-open by design", per
-that same header comment).
+**What it demonstrates:** `amf_xdp_enforce()` must tell an SCTP/NGAP packet
+(the only traffic it's meant to inspect — see `../amf_xdp.c`'s file header)
+apart from ordinary HTTP traffic, which must sail through completely
+untouched ("fail-open by design"). This monitor shows that live: attach it
+to an interface, send it real HTTP traffic and watch nothing move, then
+send it a real SCTP/NGAP `InitialUEMessage` and watch `amf_xdp_stats` and
+`ue_state_map` react.
+
+## Why a monitor instead of an automated test
+
+An earlier version of this file fed `amf_xdp_enforce()` synthetic packets
+through the kernel's `BPF_PROG_TEST_RUN` facility and asserted on the
+result — useful for point-checking the parser in isolation, deterministic,
+CI-friendly. But it can't show the thing that actually matters day to day:
+does the program correctly categorize traffic *as it actually arrives on
+the wire*, on a *real* interface, possibly interleaved with everything else
+a real veth carries. This version trades determinism for that — it's a
+tool you run while generating real traffic and watch, not something with a
+pass/fail exit code.
 
 ## Requirements
 
-Everything [`map_test.md`](map_test.md#requirements) requires, plus:
+Everything [`doc_map_test.md`](doc_map_test.md#requirements) requires, plus:
 
-- **clang**, to build `amf_xdp.o` (`amf/test/Makefile` runs
-  `clang -target bpf ...`, the same command `../README.md`'s "Building &
+- **clang**, to build `amf_xdp.o` (see the Makefile's `amf_xdp.o` rule —
+  the same `clang -target bpf ...` command `../README.md`'s "Building &
   Running" section documents for hand-compiling `amf_xdp.c`).
-- **A libbpf recent enough to have `bpf_prog_test_run_opts()`** (the
-  modern, non-deprecated test-run entry point; same rough libbpf-version
-  baseline the rest of this suite already assumes for `bpf_map_create()`).
+- **libbpf with `bpf_xdp_attach()`/`bpf_xdp_detach()`** (libbpf >= 0.6 —
+  these replaced the older, deprecated `bpf_set_link_xdp_fd()`).
+- **The target interface must already exist.** `test_xdp` attaches to it;
+  it doesn't create it. Default is `veth5538fab` (`../amf_xdp.c`'s own
+  documented attach target — see its file header and `../README.md`'s
+  "Building & Running"), overridable as `argv[1]`.
+- Root, same as everything else in this directory (attaching an XDP
+  program and reading BPF maps both need real BPF/net privileges).
 
-Build with:
+## Usage
 
 ```sh
 cd amf/test
-make test_xdp     # also builds amf_xdp.o as a side effect (see Makefile)
-sudo ./test_xdp
+make test_xdp                 # also builds amf_xdp.o (see Makefile)
+sudo ./test_xdp                # attaches to veth5538fab
+# or:
+sudo ./test_xdp my-other-veth  # attaches to a different interface
 ```
 
 `amf_xdp.o` is built **into `amf/test/`**, not `../` — nothing is added to
-the parent `amf/` directory by this test suite.
+the parent `amf/` directory.
 
-## Why `BPF_PROG_TEST_RUN` instead of a real veth + `ip link set xdp`
+`test_xdp` is deliberately **not** part of `make test`'s automated run loop
+(it never exits on its own) — see `MONITOR_BINS` vs. `TEST_BINS` in the
+Makefile. Build it with plain `make` (which builds everything) or
+`make test_xdp` specifically; run it by hand.
 
-`../amf_xdp.c`'s own documented attach procedure is:
+While it's running, in another shell on the same box:
 
 ```sh
-sudo ip link set dev veth5538fab xdp obj amf_xdp.o sec xdp
+# should NOT move amf_xdp_stats or create a ue_state_map entry
+curl --interface veth5538fab http://some-http-server/
+
+# should move amf_xdp_stats and populate ue_state_map -- needs a real (or
+# simulated) SCTP association carrying an NGAP InitialUEMessage across
+# the same interface, e.g. from a real gNB/UE simulator pointed at it
 ```
 
-That needs a specific veth already wired up to a running AMF container's
-N2 interface — not something a test suite can spin up portably, and not
-something that gives you fine control over exact packet bytes anyway.
-`BPF_PROG_TEST_RUN` (exposed by libbpf as `bpf_prog_test_run_opts()`) sidesteps
-all of that: it hands a raw byte buffer straight to the *loaded* program as
-`ctx->data`/`ctx->data_end`, runs it for real in the kernel, and reports
-back the program's actual return value (`XDP_PASS`, `XDP_DROP`, ...). The
-program has no way to tell this apart from a packet that arrived on a real
-NIC — it only ever looks at `ctx->data`/`ctx->data_end`, both of which
-`BPF_PROG_TEST_RUN` populates from the buffer you hand it.
-
-## Why the maps need to be repopulated here too
-
-`../amf_xdp.c` `#include`s `../sm_map.c`, so the compiled `amf_xdp.o`
-declares the same pinned `sm_nodes`/`sm_edges` maps `map_test.md`'s tests
-exercise directly. Loading `amf_xdp.o` will create+pin them (empty) if this
-is the first BPF object on the box to ever touch them — exactly the
-"loads first, creates+pins them EMPTY" scenario `../amf_xdp.c`'s own header
-comment warns about. `test_xdp.c`'s `main()` deals with this the same way
-`amf_loader.c` does in production: after loading, it calls
-`fx_populate_nodes()`/`fx_populate_edges()` (from `fixtures.h`, the real
-29-node/52-edge table) on `amf_xdp.o`'s own `sm_nodes`/`sm_edges` map fds,
-**unconditionally** — this is an idempotent upsert (`BPF_ANY`), so it's
-correct and harmless whether it just created those maps empty or they
-already existed (e.g. a real `amf_loader` is running on the same box).
+Ctrl+C detaches the program from the interface and exits cleanly.
 
 ## Code walkthrough
 
 ### Mirrored constants/structs
 
-`../amf_xdp.c` defines several things privately — an enum for its stats
-array indices, a `struct ue_val` for its per-UE map, plus assorted
-`#define`s (`ETH_P_IP`, `IPPROTO_SCTP`, ...) — none of which are exposed
-through `../sm_map.h` (the only header both files share). Since
-`amf_xdp.c` is only ever *loaded as a compiled `.o`* here, never
-`#include`d as source, `test_xdp.c` keeps its own byte-identical copies:
+`../amf_xdp.c` defines its stats-array indices and its per-UE value struct
+privately — neither is exposed through `../sm_map.h` (the only header both
+files share). Since `amf_xdp.c` is only ever *loaded as a compiled `.o`*
+here, never `#include`d as source, `test_xdp.c` keeps byte-identical
+copies:
 
 ```c
 enum { STAT_PASS = 0, STAT_DROP = 1, STAT_STATE_INVALID = 2, STAT_MAX };
@@ -90,192 +93,93 @@ struct ue_val {
 };
 ```
 
-This is the same convention `fixtures.h` already uses for mirroring
-`../amf_comm.c`'s FSM table — keep these in sync with `../amf_xdp.c` by
-inspection if it ever changes.
+Same convention `fixtures.h` uses for mirroring `../amf_comm.c`'s FSM
+table — keep these in sync with `../amf_xdp.c` by inspection if it ever
+changes.
 
-### The packet-builder structs
+### `now_ns()` / `print_ts()`
 
-`test_xdp.c` needs to write real Ethernet/IPv4/SCTP/TCP header bytes from
-plain userspace C, which rules out `../amf_xdp.c`'s own approach
-(`vmlinux.h`'s BTF-derived kernel structs, only usable in a BPF-target
-compilation). It also deliberately avoids the normal userspace fix
-(`<linux/if_ether.h>`/`<linux/ip.h>`/`<netinet/tcp.h>`), because mixing
-`linux/*.h` and `netinet/*.h` network headers in one translation unit is a
-well-known source of duplicate-definition build errors on Linux.
+`../amf_xdp.c` stamps `ue_val.last_seen_ns` with `bpf_ktime_get_ns()` —
+nanoseconds since boot, i.e. `CLOCK_MONOTONIC`. `now_ns()` reads the same
+clock from userspace (`clock_gettime(CLOCK_MONOTONIC, ...)`) so
+`dump_ue_state_map()`'s "last update N.Ns ago" is a real, comparable age,
+not just a raw uninterpretable integer. `print_ts()` is unrelated —
+just a wall-clock `HH:MM:SS` prefix for each printed line, same idea as
+`../amf_loader.c`'s own `fmt_ts()` helper.
 
-Instead, `test_xdp.c` defines its own minimal, `__attribute__((packed))`
-structs (`test_ethhdr`, `test_iphdr`, `test_sctphdr`,
-`test_sctp_data_chunk`, `test_tcphdr`). Two of them —
-`test_sctphdr`/`test_sctp_data_chunk` — are byte-for-byte mirrors of
-`../amf_xdp.c`'s own `struct sctphdr_simple`/`struct sctp_data_chunk`,
-since those are exactly what `amf_xdp_enforce()` parses the wire bytes as.
+### `dump_ue_state_map()`
 
-The trickiest part of hand-rolling `test_iphdr`/`test_tcphdr` is normally
-the bitfields (IPv4's 4-bit version + 4-bit IHL packed into one byte; TCP's
-4-bit data-offset). Rather than reproduce the host's own
-byte-order-dependent bitfield packing, both are written as a single
-already-packed literal:
-
-- `0x45` for IPv4 = version 4 (high nibble) + IHL 5/20-byte-header (low
-  nibble) — this is the literal byte RFC 791 puts on the wire, true on any
-  host regardless of how *that host's* C compiler would pack an equivalent
-  bitfield.
-- `0x50` for TCP = data offset 5/20-byte-header (high nibble) + reserved
-  bits 0 (low nibble), same reasoning, RFC 793.
-
-This sidesteps bitfield-order ambiguity entirely instead of trying to get
-it right.
-
-### `build_sctp_ngap_initial_ue_message()`
-
-Builds, byte by byte, a complete Ethernet → IPv4 → SCTP → single DATA chunk
-frame whose payload's first two bytes are `procedureCode = 15`
-(`id-InitialUEMessage`, 3GPP TS 38.413) — i.e. exactly what a real gNB's
-very first NGAP message to the AMF looks like at the byte level
-`amf_xdp_enforce()` actually reads:
-
-1. `struct test_ethhdr` with `ethertype = htons(ETH_P_IP)` — the first
-   thing `amf_xdp_enforce()` checks (`eth->h_proto != bpf_htons(ETH_P_IP)`
-   → early `XDP_PASS` otherwise).
-2. `struct test_iphdr` with `protocol = IPPROTO_SCTP` (132) — the second
-   check, and the one this whole test suite is built around: change this
-   one field and every other check downstream stops applying.
-3. `struct test_sctphdr` — ports are filled in for realism (NGAP's IANA
-   port 38412) but `amf_xdp_enforce()` never actually reads them.
-4. `struct test_sctp_data_chunk` with `type = SCTP_DATA` (0) and
-   `ppid = htonl(SCTP_PPID_NGAP)` (60) — both checked
-   (`chunk->type != SCTP_DATA` / `bpf_ntohl(chunk->ppid) != SCTP_PPID_NGAP`
-   → early `XDP_PASS` otherwise).
-5. 16 raw bytes standing in for the start of the NGAP PDU: the first two
-   are `{0x00, 15}` (procedureCode 15, big-endian, matching
-   `amf_xdp.c`'s raw `(b0 << 8) | b1` read); the rest are padding just to
-   satisfy the `ngap + 16 > data_end` bounds check — their content is
-   never inspected.
-
-It writes the packet's source IP out through an output parameter, since
-that IP becomes `amf_xdp.c`'s `src_ip` — the key into both
-`amf_xdp_rate_map` and `ue_state_map` — so the test can look the resulting
-state up afterward.
-
-### `build_http_get_request()`
-
-Builds an ordinary Ethernet → IPv4 → TCP frame carrying a literal
-`GET / HTTP/1.1` request — real, readable HTTP bytes, so a human looking at
-a packet capture would immediately recognize it as web traffic, not just
-"some non-SCTP protocol number". The one field that matters functionally
-is `iph.protocol = IPPROTO_TCP` (6): `amf_xdp_enforce()`'s very first
-protocol check (`iph->protocol != IPPROTO_SCTP`) fails immediately, and it
-never parses a single byte of the TCP header or HTTP text that follows —
-they're there for realism/readability, not because the program under test
-looks at them.
-
-### `run_xdp_prog()`
-
-Thin wrapper around `bpf_prog_test_run_opts()`:
-
-```c
-struct bpf_test_run_opts opts = {0};
-opts.sz            = sizeof(opts);
-opts.data_in       = pkt;
-opts.data_size_in  = (uint32_t)len;
-opts.data_out      = pkt_out;       /* 4096-byte scratch buffer */
-opts.data_size_out = sizeof(pkt_out);
-opts.repeat        = 1;
-
-bpf_prog_test_run_opts(prog_fd, &opts);
-return opts.retval;   /* the program's real XDP_PASS/XDP_DROP/... return value */
-```
-
-`data_out`/`data_size_out` are supplied even though `amf_xdp_enforce()`
-never mutates a packet (no `bpf_xdp_adjust_head()` etc.), because some
-kernel versions expect a real output buffer whenever `data_in` is set.
-`ctx_in` is deliberately left `NULL` — that tells the kernel to derive the
-`xdp_md`'s `data`/`data_end` purely from `data_in`/`data_size_in`, which is
-all `amf_xdp_enforce()`'s parsing logic (`ctx->data`/`ctx->data_end` only,
-no `ingress_ifindex`/`rx_queue_index` checks) needs.
-
-### The three tests
-
-Program/map fds are loaded once in `main()` and shared by every test
-through file-scope statics (`g_prog_fd`/`g_stats_fd`/`g_ue_fd`), since all
-three tests exercise the *same* loaded `amf_xdp_enforce()` instance and its
-*same* maps — the HTTP test's whole point is checking that the stats map
-`test_sctp_ngap_packet_is_categorized()` just wrote to is untouched by the
-next packet.
-
-- **`test_stats_start_at_zero`** — sanity check. `amf_xdp_stats`/
-  `ue_state_map` are plain (unpinned) maps, freshly created by this
-  process's own `bpf_object__load()` call, never shared with a prior run,
-  so every stat must read back as exactly `0`.
-
-- **`test_sctp_ngap_packet_is_categorized`** — sends the SCTP/NGAP
-  `InitialUEMessage` built above and checks, not just the return code, but
-  every observable side effect a real categorized packet should have:
-  - `retval == XDP_PASS` (a single packet is nowhere near the 50/s rate
-    limit).
-  - `amf_xdp_stats[STAT_PASS] == 1` — it went all the way through
-    `bump_stat(STAT_PASS)` at the bottom of the function.
-  - `amf_xdp_stats[STAT_STATE_INVALID] == 0` — and specifically as a
-    **clean FSM hit**, not a mismatch that merely didn't get dropped:
-    `fixtures.h` really does contain the
-    `UE/gNB --InitialUEMessage--> REG_RECEIVED` edge `amf_xdp_enforce()`
-    looks up for a source it's never seen before (`from_state` defaults to
-    `"UE/gNB"`).
-  - `ue_state_map[src_ip].state == "REG_RECEIVED"` — read back through the
-    locally-mirrored `struct ue_val`, proving `ue_state_set()` really ran.
-
-- **`test_http_packet_is_not_categorized`** — sends the HTTP/TCP packet and
-  checks that it changed *nothing*:
-  - `retval == XDP_PASS` — but via the fail-open early-return path, not the
-    categorized-and-passed path (indistinguishable by return code alone,
-    which is exactly why the next two checks matter).
-  - `amf_xdp_stats[STAT_PASS]` is still exactly `1` — the same value the
-    previous test left it at, not `2`. This is the crux of "distinguish
-    SCTP from HTTP": it proves this packet never reached `bump_stat()` at
-    all, not merely that some other counter absorbed it.
-  - `bpf_map_lookup_elem()` on `ue_state_map` for the HTTP packet's source
-    IP returns `-ENOENT` — no entry was ever created, because
-    `amf_xdp_enforce()` returned before it ever computed an FSM state for
-    this source.
+Walks every entry in `ue_state_map` using the real kernel hash-map
+iteration protocol — `bpf_map_get_next_key()` + `bpf_map_lookup_elem()`
+per key, the same pattern `doc_map_test.md`'s `test_map_walk.c` uses for
+`sm_nodes`/`sm_edges` — and prints each as `<source IP>  state=<FSM state>
+last update <age>`. This is the live, observable version of "distinguish
+SCTP and HTTP": only sources `amf_xdp_enforce()` actually categorized as
+NGAP ever get an entry here at all. An HTTP client hammering the same
+interface will never appear in this dump, no matter how much traffic it
+sends — the program returns (via the `iph->protocol != IPPROTO_SCTP`
+check) long before it would compute a per-source key for it.
 
 ### `main()`
 
-Mirrors the real `amf_loader` → `amf_xdp.o` boot order described in
-`../README.md`'s "Building & Running" section, just in one process instead
-of two:
+Mirrors the real `amf_loader` → `amf_xdp.o` boot order `../README.md`
+describes, in one process instead of two, then adds the attach/monitor/
+detach loop that role doesn't otherwise need:
 
-1. `require_root()` — loading a `BPF_PROG_TYPE_XDP` program and issuing
-   `BPF_PROG_TEST_RUN` both need real BPF privileges.
-2. `bpf_object__open_file("amf_xdp.o", NULL)` + `bpf_object__load(obj)` —
-   parse and load the object; this is also the point at which
-   `sm_nodes`/`sm_edges` get created+pinned (or reused) per `../sm_map.c`'s
-   `LIBBPF_PIN_BY_NAME` declarations.
-3. Look up the program (`amf_xdp_enforce`) and all four maps it declares
-   (`sm_nodes`, `sm_edges`, `amf_xdp_stats`, `ue_state_map`) by name.
-4. `fx_populate_nodes()`/`fx_populate_edges()` — unconditionally
-   (re)populate the real FSM table, exactly like `amf_loader.c`'s
-   `sm_map_populate()` does every time it starts.
-5. `RUN_TEST()` the three tests above, in order (each depends on the stats
-   state the previous one left behind).
-6. `bpf_object__close(obj)` — closes the program fd and every map fd this
-   object owns in one call.
+1. **Resolve the interface.** `if_nametoindex(ifname)` — fails loudly
+   with a clear message if the named interface doesn't exist, rather than
+   letting `bpf_xdp_attach()` fail later with a less obvious error.
+2. **Load `amf_xdp.o`.** `bpf_object__open_file()` + `bpf_object__load()`
+   — this is also the point at which `sm_nodes`/`sm_edges` get
+   created+pinned (or reused, if a real `amf_loader`/prior run already
+   populated them) per `../sm_map.c`'s `LIBBPF_PIN_BY_NAME` declarations.
+3. **Look up** the program (`amf_xdp_enforce`) and all four maps it
+   declares (`sm_nodes`, `sm_edges`, `amf_xdp_stats`, `ue_state_map`) by
+   name.
+4. **(Re)populate the FSM table.** `fx_populate_nodes()`/
+   `fx_populate_edges()`, unconditionally — an idempotent upsert
+   (`BPF_ANY`), exactly like `amf_loader.c`'s `sm_map_populate()` runs
+   every time `amf_loader` starts, regardless of prior state.
+5. **Attach.**
+   ```c
+   __u32 xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST | XDP_FLAGS_SKB_MODE;
+   bpf_xdp_attach(ifindex, prog_fd, xdp_flags, NULL);
+   ```
+   - `XDP_FLAGS_SKB_MODE` (generic mode) works on any interface, including
+     a veth pair, without needing native driver-level XDP support — the
+     same portability tradeoff `../README.md`'s own `ip link set ... xdp`
+     command implicitly makes.
+   - `XDP_FLAGS_UPDATE_IF_NOEXIST` makes the attach **fail** instead of
+     silently replacing whatever program is already attached — so running
+     this monitor can never accidentally steal the program out from under
+     a real production `amf_xdp.o` that's already running on the same
+     interface.
+6. **Install signal handlers** (`SIGINT`/`SIGTERM` → set a
+   `volatile sig_atomic_t g_stop`), same pattern `../amf_loader.c` uses.
+7. **Monitor loop:** once a second, read all three `amf_xdp_stats`
+   counters; if any changed since the last tick, print a timestamped
+   summary line (`PASS=n(+d) DROP=n(+d) STATE_INVALID=n(+d)`) plus a full
+   `dump_ue_state_map()`. Stays silent on ticks where nothing changed,
+   rather than printing a heartbeat line every second regardless.
+8. **On Ctrl+C:** `bpf_xdp_detach(ifindex, xdp_flags, NULL)` removes the
+   program from the interface, then `bpf_object__close(obj)` closes the
+   program fd and every map fd this object owns.
 
-## Notes / things this test deliberately does NOT cover
+## Notes / things this monitor deliberately does NOT do
 
-- **The rate limiter** (`amf_xdp_rate_map`, `RATE_MAX_PER_WIN = 50`) — each
-  test here sends exactly one packet per scenario, nowhere near the
-  threshold. Exercising the actual `XDP_DROP` flood path would need ~51
-  `InitialUEMessage` packets from the same source in one `repeat`d
-  `bpf_prog_test_run_opts()` call (`opts.repeat` can do this in one
-  syscall) — a reasonable next test to add, not attempted here since it
-  wasn't the ask.
-- **FSM-mismatch flagging** (`STAT_STATE_INVALID` actually going non-zero)
-  — would need a source already mid-registration (an existing
-  `ue_state_map` entry) receiving an out-of-spec label next, similar in
-  spirit to `sm_use_case.c`'s T5 attack step but driven through the XDP
-  program instead of a direct map lookup. Out of scope for "distinguish
-  SCTP from HTTP" specifically.
-- **A real veth attach** (`sudo ip link set dev ... xdp obj amf_xdp.o sec
-  xdp`) — intentionally not exercised; see "Why `BPF_PROG_TEST_RUN`..."
-  above.
+- **No assertions, no exit code.** This is an observability tool, not a
+  test — see "Why a monitor instead of an automated test" above. If you
+  want deterministic, CI-runnable coverage of the parsing logic itself,
+  that's what a `BPF_PROG_TEST_RUN`-based test would be for; this file no
+  longer is one.
+- **Doesn't generate any traffic itself.** You need a real (or simulated)
+  SCTP/NGAP source and some ordinary HTTP traffic on the same interface to
+  see the two behaviors contrast. `ip netns`/`veth` pairs plus `curl` for
+  the HTTP side, and a real or scripted SCTP association carrying an NGAP
+  `InitialUEMessage` for the other, are outside this file's scope.
+- **Rate limiting and FSM-mismatch flagging** (`amf_xdp_rate_map`,
+  `STAT_DROP`, `STAT_STATE_INVALID` actually going non-zero) will show up
+  in the monitor output if real traffic triggers them, but nothing here
+  drives those cases deliberately — you'd need a real flood
+  (>50 `InitialUEMessage`/s from one source) or a source already
+  mid-registration receiving an out-of-spec label, respectively.

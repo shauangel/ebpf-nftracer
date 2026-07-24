@@ -178,6 +178,7 @@ rejected) would.
 
 ## See also
 
-[`xdp_test.md`](xdp_test.md) — tests for `../amf_xdp.c` (`test_xdp.c`),
-the XDP program that shares `sm_nodes`/`sm_edges` with the maps tested
-here but adds real packet parsing (SCTP/NGAP vs. everything else) on top.
+[`doc_xdp_test.md`](doc_xdp_test.md) — live monitor for `../amf_xdp.c`
+(`test_xdp.c`), the XDP program that shares `sm_nodes`/`sm_edges` with the
+maps tested here but adds real packet parsing (SCTP/NGAP vs. everything
+else) on top.
