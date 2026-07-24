@@ -1,0 +1,238 @@
+VERIFIED eBPF ATTACH POINTS
+===========================
+Source list      : amf/missing_attach_points.txt (23-state threat-aware AMF FSM)
+Verified against : bin/amf (ELF, statically linked, NOT stripped, has DWARF debug_info,
+                    BuildID e944aec3ab5a3d59a6322bdb46295cf1680bb75a)
+Method           : `nm bin/amf` for symbol existence + `go tool objdump -s '<sym>' bin/amf`
+                    for the DWARF-resolved source file:line of the function's first
+                    instruction (cross-checked against the PDF's cited line numbers).
+
+Every symbol below IS PRESENT in bin/amf. Full Go symbol string is exactly what must
+go in an attach_target.func_name field (uprobe target = exported/mangled symbol name,
+matches nm/objdump output verbatim). Lines that differ from the PDF are footnoted --
+all differences are explained (function signature spans multiple lines, or the PDF's
+"location" column cites a call site rather than the definition), not actual errors.
+
+Format:  [TYPE] func_name (verbatim, use as-is in attach_target.func_name)
+         binary: <file:line resolved from DWARF>   pdf: <file:line the PDF cited>
+
+--------------------------------------------------------------------------
+PART 1 -- Normal-Path States (13)
+--------------------------------------------------------------------------
+
+01 REG_RECEIVED
+   [UPROBE] github.com/free5gc/amf/internal/ngap.handleInitialUEMessageMain
+            binary: handler.go:418   pdf: handler.go:430
+   [UPROBE] github.com/free5gc/amf/internal/nas.HandleNAS
+            binary: handler.go:14    pdf: handler.go:14   [exact match]
+
+02 CONTEXT_LOOKUP
+   [UPROBE]    github.com/free5gc/amf/internal/gmm.contextTransferFromOldAmf
+               binary: handler.go:579   pdf: handler.go:579   [exact match]
+   [URETPROBE] github.com/free5gc/amf/internal/sbi/consumer.(*namfService).UEContextTransferRequest
+               binary: amf_service.go:245   pdf: amf_service.go:245   [exact match]
+
+03 IDENTITY_PENDING
+   [UPROBE] github.com/free5gc/amf/internal/gmm/message.SendIdentityRequest
+            binary: send.go:91   pdf: send.go:91   [exact match]
+   [UPROBE] github.com/free5gc/amf/internal/gmm.HandleIdentityResponse
+            binary: handler.go:1535   pdf: handler.go:1536
+
+04 AUTH_VECTOR_PENDING
+   [UPROBE]    github.com/free5gc/amf/internal/gmm.AuthenticationProcedure
+               binary: handler.go:1661   pdf: handler.go:1662
+   [URETPROBE] github.com/free5gc/amf/internal/sbi/consumer.(*nausfService).SendUEAuthenticationAuthenticateRequest
+               binary: ausf_service.go:51   pdf: ausf_service.go:51   [exact match]
+
+05 NAS_AUTHENTICATING
+   [UPROBE] github.com/free5gc/amf/internal/gmm/message.SendAuthenticationRequest
+            binary: send.go:136   pdf: send.go:136   [exact match]
+   [UPROBE] github.com/free5gc/amf/internal/gmm.HandleAuthenticationResponse
+            binary: handler.go:1972   pdf: handler.go:1973
+   [UPROBE] github.com/free5gc/amf/internal/gmm.HandleAuthenticationFailure
+            binary: handler.go:2113   pdf: handler.go:2124
+
+06 NAS_SECURITY_PENDING
+   [UPROBE] github.com/free5gc/amf/internal/gmm.SecurityMode
+            binary: sm.go:260   pdf: sm.go:260   [exact match]
+   [UPROBE] github.com/free5gc/amf/internal/gmm/message.SendSecurityModeCommand
+            binary: send.go:434   pdf: send.go:434   [exact match]
+   [UPROBE] github.com/free5gc/amf/internal/gmm.HandleSecurityModeComplete
+            binary: handler.go:2274   pdf: handler.go:2292
+   [UPROBE] github.com/free5gc/amf/internal/gmm.HandleSecurityModeReject
+            binary: handler.go:2336   pdf: handler.go:2354
+
+07 UDM_REGISTERING
+   [UPROBE]    github.com/free5gc/amf/internal/gmm.communicateWithUDM
+               binary: handler.go:1004   pdf: handler.go:1004   [exact match]
+   [URETPROBE] github.com/free5gc/amf/internal/sbi/consumer.(*nudmService).UeCmRegistration
+               binary: udm_service.go:382   pdf: udm_service.go:382   [exact match]
+
+08 SUBSCRIPTION_LOADING
+   [URETPROBE] github.com/free5gc/amf/internal/sbi/consumer.(*nudmService).SDMGetAmData
+               binary: udm_service.go:95   pdf: udm_service.go:95   [exact match]
+   [UPROBE]    github.com/free5gc/amf/internal/sbi/consumer.(*nudmService).SDMGetSmfSelectData
+               binary: udm_service.go:143   pdf: udm_service.go:143   [exact match]
+   [UPROBE]    github.com/free5gc/amf/internal/sbi/consumer.(*nudmService).SDMGetUeContextInSmfData
+               binary: udm_service.go:187   pdf: udm_service.go:187   [exact match]
+   [UPROBE]    github.com/free5gc/amf/internal/sbi/consumer.(*nudmService).SDMSubscribe
+               binary: udm_service.go:230   pdf: udm_service.go:230   [exact match]
+
+09 POLICY_ASSOCIATING
+   [URETPROBE] github.com/free5gc/amf/internal/sbi/consumer.(*npcfService).AMPolicyControlCreate
+               binary: pcf_service.go:47   pdf: pcf_service.go:47   [exact match]
+
+10 UE_CONTEXT_READY
+   [UPROBE] github.com/free5gc/amf/internal/gmm/message.SendRegistrationAccept
+            binary: send.go:562   pdf: send.go:562   [exact match]
+
+11 SM_CONTEXT_PENDING
+   [UPROBE]    github.com/free5gc/amf/internal/gmm.CreatePDUSession
+               binary: handler.go:222   pdf: handler.go:222   [exact match]
+   [URETPROBE] github.com/free5gc/amf/internal/sbi/consumer.(*nsmfService).SendCreateSmContextRequest
+               binary: smf_service.go:153   pdf: smf_service.go:153   [exact match]
+
+12 INITIAL_CONTEXT_SETUP
+   [UPROBE] github.com/free5gc/amf/internal/ngap/message.SendInitialContextSetupRequest
+            binary: send.go:458   pdf: send.go:462
+   [UPROBE] github.com/free5gc/amf/internal/ngap.handleInitialContextSetupResponseMain
+            binary: handler.go:928   pdf: handler.go:948
+
+13 REGISTERED_CONNECTED
+   [UPROBE] github.com/free5gc/amf/internal/gmm.Registered
+            binary: sm.go:65   pdf: sm.go:65   [exact match]
+   [UPROBE] github.com/free5gc/amf/internal/gmm.HandleRegistrationComplete
+            binary: handler.go:2222   pdf: handler.go:2237
+
+--------------------------------------------------------------------------
+PART 2 -- Failure / Threat States (10)
+--------------------------------------------------------------------------
+
+14 REG_REJECTED
+   [UPROBE] github.com/free5gc/amf/internal/gmm/message.SendRegistrationReject
+            binary: send.go:393   pdf: send.go:393   [exact match]
+
+15 AUTH_FAILED
+   [UPROBE] github.com/free5gc/amf/internal/gmm.Authentication
+            binary: sm.go:150 (function start) -- AuthFailEvent case itself is a
+            switch-branch inside this function body around sm.go:222-233 per PDF;
+            uprobe still fires on function entry (sm.go:150), branch must be
+            distinguished by args/state at runtime, not by attach address.
+            (reuses HandleAuthenticationResponse / HandleAuthenticationFailure, state 05)
+
+16 REPLAY_SUSPECTED  [derived signal -- NOT a hookable symbol]
+   [UPROBE]  github.com/free5gc/amf/internal/gmm.HandleAuthenticationFailure  (see state 05)
+             SynchFailure branch is inside this function body, handler.go:2175-2183 per PDF.
+   [DERIVED] ue.MacFailed -- struct field on *context.AmfUe, NOT a function symbol.
+             No nm/objdump entry exists (expected -- it's a field, not hookable
+             directly). Set inside internal/nas.HandleNAS (nas/handler.go:61, confirmed
+             the enclosing function symbol exists -- see state 01). Read at 12+ sites in
+             internal/gmm.HandleNAS* handlers. Build as a derived eBPF-map counter
+             correlating repeated HandleNAS hits for the same UE key.
+
+17 SECURITY_FAILED
+   [UPROBE] github.com/free5gc/amf/internal/nas/nas_security.Decode
+            binary: security.go:120   pdf: security.go:120   [exact match]
+            (reuses HandleSecurityModeReject, state 06)
+   [UPROBE] github.com/free5gc/amf/internal/gmm.HandleSecurityModeComplete  (see state 06)
+            MacFailed branch is inside this function body, handler.go:2297 per PDF.
+
+18 SECURITY_POLICY_VIOLATION
+   [UPROBE] github.com/free5gc/amf/internal/context.(*AmfUe).SelectSecurityAlg
+            binary: amf_ue.go:603   pdf: amf_ue.go:603   [exact match]
+
+19 NF_TIMEOUT  [derived signal -- classify uretprobe error return]
+   [URETPROBE] github.com/free5gc/amf/internal/sbi/consumer.(*nssfService).NSSelectionGetForRegistration
+               binary: nssf_service.go:44   pdf: nssf_service.go:44   [exact match]
+               (also reuses uretprobes from states 04/07/08/09/11)
+
+20 SLICE_REJECTED
+   [UPROBE]    github.com/free5gc/amf/internal/gmm.handleRequestedNssai
+               binary: handler.go:1103   pdf: handler.go:1103   [exact match]
+   [UPROBE]    github.com/free5gc/amf/internal/gmm.transport5GSMMessage
+               binary: handler.go:83   pdf: handler.go:83   [exact match]
+               (NSSAI check branch ~161-168 inside function body, per PDF)
+   [URETPROBE] github.com/free5gc/amf/internal/sbi/consumer.(*nssfService).NSSelectionGetForRegistration
+               (same symbol as state 19)
+
+21 PDU_SESSION_REJECTED
+   [UPROBE] github.com/free5gc/amf/internal/gmm.CreatePDUSession  (same symbol as state 11)
+            reject branch is inside this function body, handler.go:271-289 per PDF --
+            distinguish success/PDU_SESSION_REJECTED/SLICE_REJECTED via args/return
+            at this one probe.
+
+22 CONTEXT_SETUP_FAILED
+   [UPROBE] github.com/free5gc/amf/internal/ngap.handleInitialContextSetupFailureMain
+            binary: handler.go:1009   pdf: handler.go:1029
+
+23 CLEANUP_REQUIRED
+   [UPROBE] github.com/free5gc/amf/internal/gmm/common.RemoveAmfUe
+            binary: user_profile.go:13   pdf: user_profile.go:13   [exact match]
+   [UPROBE] github.com/free5gc/amf/internal/context.(*AmfUe).Remove
+            binary: amf_ue.go:312   pdf: amf_ue.go:312   [exact match]
+
+--------------------------------------------------------------------------
+PART 3 -- Supplementary / Edge-only hooks
+--------------------------------------------------------------------------
+
+   [UPROBE] github.com/free5gc/amf/internal/context.(*AmfUe).SecurityContextIsValid
+            binary (definition site): amf_ue.go:468
+            pdf location column (gmm/sm.go:272) is the CALL SITE inside
+            internal/gmm.SecurityMode (state 06), not the definition -- the
+            function itself is defined in context/amf_ue.go:468. Use the symbol
+            above as func_name; it still fires wherever it's called from.
+
+   [UPROBE] github.com/free5gc/amf/internal/ngap.handlerInitialContextSetupResponse
+            binary: handler_generated.go:4163   pdf: handler_generated.go:4163   [exact match]
+
+   [UPROBE] github.com/free5gc/amf/internal/nas.Dispatch
+            binary: dispatch.go:15   pdf: dispatch.go:15   [exact match]
+
+   --       github.com/free5gc/util/fsm.(*FSM).SendEvent
+            CONFIRMED present in bin/amf (statically linked, symbol type T/exported):
+              0xb7f0a0 T github.com/free5gc/util/fsm.(*FSM).SendEvent
+            PDF was correct that this is hookable via `go tool nm` resolution --
+            it resolves and can be used as a uprobe func_name despite living in an
+            external module, since the final static binary contains it.
+
+   --       PDU_SESSION_REJECTED -> UE_CONTEXT_READY (retain context edge)
+            No symbol -- implicit signal (absence of a RemoveAmfUe call). Not
+            independently verifiable via nm; confirm via userspace correlation only.
+
+Packet-ingress boundary (REG_RECEIVED, below Go runtime):
+   [ALREADY IMPLEMENTED in amf/xdp_ngap.c] raw SCTP DATA chunk, PPID=60 (NGAP)
+
+   [UPROBE, optional, not yet hooked] github.com/free5gc/sctp.(*SCTPListener).AcceptSCTP
+            binary: sctp_linux.go:399   pdf: service.go:94 (this is the AMF-side
+            CALL SITE inside internal/ngap/service.go:94; the symbol itself is
+            defined in the external free5gc/sctp module, confirmed present in
+            the static binary at sctp_linux.go:399)
+   [UPROBE, optional, not yet hooked] github.com/free5gc/sctp.(*SCTPConn).SCTPRead
+            binary: sctp_linux.go:146   pdf: service.go:183,200 (call sites)
+   [UPROBE, optional, not yet hooked] github.com/free5gc/amf/internal/ngap/service.handleConnection
+            binary: service.go:183   pdf: service.go:183   [exact match]
+   [UPROBE, optional, not yet hooked] github.com/free5gc/amf/internal/ngap/service.dispatchToWorkerPool
+            binary: service.go:247   pdf: service.go:250
+
+--------------------------------------------------------------------------
+SUMMARY
+--------------------------------------------------------------------------
+- 40/40 distinct symbols cited across the PDF's 23 states + Part 3 are present
+  in bin/amf, confirmed via `nm` + DWARF-resolved source lines via
+  `go tool objdump -s`.
+- bin/amf's DWARF line numbers match the PDF closely (usually exact; small
+  1-20 line offsets occur where the PDF cites a multi-line function signature
+  vs. DWARF citing the first body instruction -- not a wrong symbol).
+- Two entries needed clarification, not correction:
+    * internal/gmm.Authentication -- PDF's line 222 is a switch-branch inside
+      the function, whose body actually starts at sm.go:150.
+    * context.(*AmfUe).SecurityContextIsValid -- PDF's "gmm/sm.go:272" is the
+      call site inside SecurityMode, not the function's own definition
+      (context/amf_ue.go:468).
+- ue.MacFailed (state 16) has no symbol, as expected -- it's a struct field,
+  not a function; PDF correctly flags it [DERIVED].
+- free5gc/util/fsm.(*FSM).SendEvent (Part 3) IS resolvable in the static
+  binary, confirming the PDF's note that it's hookable via `go tool nm`.
+- These verified func_name strings are ready to drop into new attach_target
+  arrays in amf_functions.c (currently #if 0'd sections cover the old,
+  unrelated processor-layer probes -- see amf/missing_attach_points.txt).

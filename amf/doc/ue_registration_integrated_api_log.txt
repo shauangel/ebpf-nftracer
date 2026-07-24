@@ -1,0 +1,47 @@
+TIMESTAMP               NF    EVENT      DETAIL
+──────────────────────  ────  ─────────  ────────────────────────────────
+
+──────────────── Initial Registration: NRF Discovery ────────────────
+[06:22:29.728652] NRF   API      AccessToken                    pid=146207 tid=3658330
+[06:22:29.733303] NRF   API      NFDiscovery                    pid=146207 tid=3658330
+
+──────────────── Initial Registration: UE Authentication Vector ────────────────
+[06:22:29.741512] AUSF  API      UEAuthentication               pid=146451 tid=3658421
+[06:22:29.745083] UDM   API      GenerateAuthData               pid=146386 tid=3658502
+[06:22:29.748219] UDR   API      QueryAuthSubscription          pid=146322 tid=3658617
+[06:22:29.752904] UDM   API      GenerateAuthData               pid=146386 tid=3658502
+[06:22:29.755601] AUSF  API      UEAuthentication               pid=146451 tid=3658421
+
+──────────────── Initial Registration: 5G-AKA Confirmation ────────────────
+[06:22:29.891336] AUSF  API      Auth5gConfirmation             pid=146451 tid=148452
+[06:22:29.895774] UDM   API      ConfirmAuthData                pid=146386 tid=148779
+[06:22:29.899143] UDR   API      CreateAuthEvent                pid=146322 tid=148803
+[06:22:29.903447] UDM   API      ConfirmAuthData                pid=146386 tid=148779
+[06:22:29.906220] AUSF  API      Auth5gConfirmation             pid=146451 tid=148452
+
+──────────────── Initial Registration: UECM + Subscription Data ────────────────
+[06:22:30.014802] UDM   API      RegistrationAmf3gppAccess      pid=146386 tid=3659120
+[06:22:30.018376] UDR   API      UpdateAmfContext               pid=146322 tid=3659188
+[06:22:30.022941] UDM   API      RegistrationAmf3gppAccess      pid=146386 tid=3659120
+[06:22:30.041662] UDM   API      GetAmData                      pid=146386 tid=3659204
+[06:22:30.052018] UDM   API      GetNssai                       pid=146386 tid=3659208
+
+──────────────── Initial Registration: AM Policy Association ────────────────
+[06:22:30.087516] PCF   API      AMPolicyControl                pid=146518 tid=3659307
+[06:22:30.091204] UDR   API      QueryPolicyData                pid=146322 tid=3659369
+[06:22:30.096718] PCF   API      AMPolicyControl                pid=146518 tid=3659307
+
+──────────────── Registration Completed at API Level ────────────────
+[06:22:30.142334] AMF   API      RegistrationCompleteMarker      pid=146120 tid=3659441
+
+──────────────── PDU Session Establishment, UPF excluded ────────────────
+[06:22:31.013774] SMF   API      PDUSessionSMContextCreate      pid=146603 tid=3660122
+[06:22:31.015863] NRF   API      AccessToken                    pid=146207 tid=3660140
+[06:22:31.021143] NRF   API      NFDiscovery                    pid=146207 tid=3660140
+[06:22:31.026321] UDM   API      GetSmData                      pid=146386 tid=3660187
+[06:22:31.032902] UDM   API      RegistrationSmfRegistrations   pid=146386 tid=3660191
+[06:22:31.038756] PCF   API      SMPolicyControl                pid=146518 tid=3660228
+[06:22:31.044318] UDR   API      QueryPolicyData                pid=146322 tid=3660235
+[06:22:31.049887] PCF   API      SMPolicyControl                pid=146518 tid=3660228
+[06:22:31.073825] AMF   API      PduSessionAcceptMarker         pid=146120 tid=3660290
+

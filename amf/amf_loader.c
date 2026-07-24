@@ -147,7 +147,46 @@ int main(int argc, char **argv)
         }
     }
 
-    /* 5. Attach AMF API uprobes */
+    /* 4b. Populate the threat-aware FSM (sm_nodes / sm_edges hash maps) */
+    printf("[*] Loading state machine...\n");
+    if (sm_map_populate(skel) < 0) {
+        err = 1;
+        goto cleanup;
+    }
+
+    /* 5. Attach threat-aware AMF FSM uprobes (one group per FSM node --
+     * see amf_functions.c / amf/verified_attach_points.txt) */
+    printf("[*] Attaching state-machine uprobes...\n");
+    if (attach_programs(skel, exe_path, pid, reg_received_funcs,            reg_received_funcs_cnt)            < 0 ||
+        attach_programs(skel, exe_path, pid, context_lookup_funcs,          context_lookup_funcs_cnt)          < 0 ||
+        attach_programs(skel, exe_path, pid, identity_pending_funcs,        identity_pending_funcs_cnt)        < 0 ||
+        attach_programs(skel, exe_path, pid, auth_vector_pending_funcs,     auth_vector_pending_funcs_cnt)     < 0 ||
+        attach_programs(skel, exe_path, pid, nas_authenticating_funcs,      nas_authenticating_funcs_cnt)      < 0 ||
+        attach_programs(skel, exe_path, pid, nas_security_pending_funcs,    nas_security_pending_funcs_cnt)    < 0 ||
+        attach_programs(skel, exe_path, pid, udm_registering_funcs,         udm_registering_funcs_cnt)         < 0 ||
+        attach_programs(skel, exe_path, pid, subscription_loading_funcs,    subscription_loading_funcs_cnt)    < 0 ||
+        attach_programs(skel, exe_path, pid, policy_associating_funcs,      policy_associating_funcs_cnt)      < 0 ||
+        attach_programs(skel, exe_path, pid, ue_context_ready_funcs,        ue_context_ready_funcs_cnt)        < 0 ||
+        attach_programs(skel, exe_path, pid, sm_context_pending_funcs,      sm_context_pending_funcs_cnt)      < 0 ||
+        attach_programs(skel, exe_path, pid, initial_context_setup_funcs,   initial_context_setup_funcs_cnt)   < 0 ||
+        attach_programs(skel, exe_path, pid, registered_connected_funcs,    registered_connected_funcs_cnt)    < 0 ||
+        attach_programs(skel, exe_path, pid, reg_rejected_funcs,            reg_rejected_funcs_cnt)            < 0 ||
+        attach_programs(skel, exe_path, pid, auth_failed_funcs,             auth_failed_funcs_cnt)             < 0 ||
+        attach_programs(skel, exe_path, pid, security_failed_funcs,         security_failed_funcs_cnt)         < 0 ||
+        attach_programs(skel, exe_path, pid, security_policy_violation_funcs, security_policy_violation_funcs_cnt) < 0 ||
+        attach_programs(skel, exe_path, pid, nf_timeout_funcs,              nf_timeout_funcs_cnt)              < 0 ||
+        attach_programs(skel, exe_path, pid, slice_rejected_funcs,          slice_rejected_funcs_cnt)          < 0 ||
+        attach_programs(skel, exe_path, pid, context_setup_failed_funcs,    context_setup_failed_funcs_cnt)    < 0 ||
+        attach_programs(skel, exe_path, pid, cleanup_required_funcs,        cleanup_required_funcs_cnt)        < 0 ||
+        attach_programs(skel, exe_path, pid, fsm_edge_funcs,                fsm_edge_funcs_cnt)                < 0) {
+        err = 1;
+        goto cleanup;
+    }
+
+    /* NOT part of the 23-state threat-aware FSM — see
+     * amf/missing_attach_points.txt. Disabled to match the #if 0'd
+     * arrays in amf_functions.c / programs in amf_tracer.bpf.c. */
+#if 0
     printf("[*] Attaching uprobes...\n");
     if (attach_programs(skel, exe_path, pid, sub_funcs,      sub_funcs_cnt)      < 0 ||
         attach_programs(skel, exe_path, pid, ue_ctx_funcs,   ue_ctx_funcs_cnt)   < 0 ||
@@ -158,6 +197,7 @@ int main(int argc, char **argv)
         err = 1;
         goto cleanup;
     }
+#endif
 
     /* 6. Attach syscall tracepoints */
     printf("[*] Attaching tracepoints...\n");
@@ -195,12 +235,36 @@ cleanup:
     printf("\n[*] Detaching...\n");
     ring_buffer__free(rb);
     detach_tracepoints(syscall_tps, syscall_tps_cnt);
+    detach_programs(reg_received_funcs,             reg_received_funcs_cnt);
+    detach_programs(context_lookup_funcs,            context_lookup_funcs_cnt);
+    detach_programs(identity_pending_funcs,          identity_pending_funcs_cnt);
+    detach_programs(auth_vector_pending_funcs,       auth_vector_pending_funcs_cnt);
+    detach_programs(nas_authenticating_funcs,        nas_authenticating_funcs_cnt);
+    detach_programs(nas_security_pending_funcs,      nas_security_pending_funcs_cnt);
+    detach_programs(udm_registering_funcs,           udm_registering_funcs_cnt);
+    detach_programs(subscription_loading_funcs,      subscription_loading_funcs_cnt);
+    detach_programs(policy_associating_funcs,        policy_associating_funcs_cnt);
+    detach_programs(ue_context_ready_funcs,          ue_context_ready_funcs_cnt);
+    detach_programs(sm_context_pending_funcs,        sm_context_pending_funcs_cnt);
+    detach_programs(initial_context_setup_funcs,     initial_context_setup_funcs_cnt);
+    detach_programs(registered_connected_funcs,      registered_connected_funcs_cnt);
+    detach_programs(reg_rejected_funcs,              reg_rejected_funcs_cnt);
+    detach_programs(auth_failed_funcs,               auth_failed_funcs_cnt);
+    detach_programs(security_failed_funcs,           security_failed_funcs_cnt);
+    detach_programs(security_policy_violation_funcs, security_policy_violation_funcs_cnt);
+    detach_programs(nf_timeout_funcs,                nf_timeout_funcs_cnt);
+    detach_programs(slice_rejected_funcs,            slice_rejected_funcs_cnt);
+    detach_programs(context_setup_failed_funcs,      context_setup_failed_funcs_cnt);
+    detach_programs(cleanup_required_funcs,          cleanup_required_funcs_cnt);
+    detach_programs(fsm_edge_funcs,                  fsm_edge_funcs_cnt);
+#if 0
     detach_programs(sub_funcs,      sub_funcs_cnt);
     detach_programs(ue_ctx_funcs,   ue_ctx_funcs_cnt);
     detach_programs(callback_funcs, callback_funcs_cnt);
     detach_programs(evnt_funcs,     evnt_funcs_cnt);
     detach_programs(n1n2msg_funcs,  n1n2msg_funcs_cnt);
     detach_programs(other_funcs,    other_funcs_cnt);
+#endif
     amf_tracer_bpf__destroy(skel);
     return err;
 }

@@ -4,6 +4,14 @@
 #include <bpf/libbpf.h>
 #include "../common.h"
 #include "amf_tracer.skel.h"
+#include "sm_map.h"
+
+/* Populate the sm_nodes / sm_edges BPF hash maps (see sm_map.c) with the
+ * full 29-node / 52-edge threat-aware AMF FSM, mirrored from
+ * amf/amf_state_machine.py. Call once, right after
+ * amf_tracer_bpf__open_and_load(). Returns 0 on success, <0 on the first
+ * bpf_map__update_elem() failure. */
+int sm_map_populate(struct amf_tracer_bpf *skel);
 
 int attach_programs(struct amf_tracer_bpf *skel,
                    const char *bin_path,

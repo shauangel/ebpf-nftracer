@@ -13,6 +13,11 @@
 
 #include "../events.h"
 
+/* Threat-aware AMF FSM as two BPF_MAP_TYPE_HASH maps (sm_nodes, sm_edges)
+ * + in-kernel lookup helpers (sm_node_lookup, sm_transition_lookup).
+ * Populated at runtime by the userspace loader -- see sm_map.c. */
+#include "sm_map.c"
+
 char LICENSE[] SEC("license") = "GPL";
 
 /* ── Maps ──────────────────────────────────────────────────────────────── */
@@ -96,10 +101,498 @@ static __always_inline void read_sockaddr_in(struct event *e,
 }
 
 
+/* ═══════════════════════════════════════════════════════════════════════
+ * Threat-aware AMF FSM uprobes — one handler per prog_name declared in
+ * amf_functions.c, grouped by FSM node exactly like those attach_target[]
+ * arrays. func_name verified against bin/amf; see
+ * amf/verified_attach_points.txt. Each handler just records that the
+ * symbol fired (EVT_API_CALL, e->api = "<STATE>:<Symbol>") -- richer
+ * per-arg/return handling (e.g. sm_transition_lookup() validation against
+ * sm_edges) is future work, not wired in here yet.
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── 01 REG_RECEIVED ───────────────────────────────────────────────────── */
+
+SEC("uprobe/amf_ngap_ue_msg")
+int amf_ngap_ue_msg(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "REG:NGAPInitialUEMsg", 20);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_handle_nas")
+int amf_handle_nas(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "REG:HandleNAS", 13);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 02 CONTEXT_LOOKUP ─────────────────────────────────────────────────── */
+
+SEC("uprobe/amf_ctx_lookup")
+int amf_ctx_lookup(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "CTXLOOKUP:XferOldAmf", 20);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_ctx_xfer")
+int amf_ctx_xfer(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "CTXLOOKUP:XferReq", 17);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 03 IDENTITY_PENDING ───────────────────────────────────────────────── */
+
+SEC("uprobe/amf_id_req")
+int amf_id_req(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "IDPENDING:SendReq", 17);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_id_resp")
+int amf_id_resp(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "IDPENDING:HandleResp", 20);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 04 AUTH_VECTOR_PENDING ────────────────────────────────────────────── */
+
+SEC("uprobe/amf_auth_proc")
+int amf_auth_proc(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "AVPENDING:AuthProc", 18);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_ausf_auth")
+int amf_ausf_auth(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "AVPENDING:AusfAuth", 18);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 05 NAS_AUTHENTICATING ─────────────────────────────────────────────── */
+
+SEC("uprobe/amf_auth_req")
+int amf_auth_req(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "NASAUTH:SendReq", 15);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_auth_resp")
+int amf_auth_resp(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "NASAUTH:HandleResp", 18);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_auth_fail")
+int amf_auth_fail(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "NASAUTH:HandleFail", 18);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 06 NAS_SECURITY_PENDING ───────────────────────────────────────────── */
+
+SEC("uprobe/amf_sec_mode")
+int amf_sec_mode(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "SECPENDING:Mode", 15);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_sec_cmd")
+int amf_sec_cmd(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "SECPENDING:Cmd", 14);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_sec_cmplt")
+int amf_sec_cmplt(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "SECPENDING:Complete", 19);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_sec_reject")
+int amf_sec_reject(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "SECPENDING:Reject", 17);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 07 UDM_REGISTERING ────────────────────────────────────────────────── */
+
+SEC("uprobe/amf_udm_comm")
+int amf_udm_comm(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "UDMREG:Communicate", 18);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_udm_uecm")
+int amf_udm_uecm(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "UDMREG:UeCmReg", 14);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 08 SUBSCRIPTION_LOADING ───────────────────────────────────────────── */
+
+SEC("uprobe/amf_sdm_amdata")
+int amf_sdm_amdata(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "SUBLOAD:AmData", 14);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_sdm_smfsel")
+int amf_sdm_smfsel(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "SUBLOAD:SmfSel", 14);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_sdm_uectx")
+int amf_sdm_uectx(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "SUBLOAD:UeCtx", 13);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_sdm_sub")
+int amf_sdm_sub(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "SUBLOAD:Sub", 11);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 09 POLICY_ASSOCIATING ─────────────────────────────────────────────── */
+
+SEC("uprobe/amf_pcf_policy")
+int amf_pcf_policy(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "POLICY:AmCreate", 15);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 10 UE_CONTEXT_READY ───────────────────────────────────────────────── */
+
+SEC("uprobe/amf_reg_accept")
+int amf_reg_accept(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "UECTXREADY:Accept", 17);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 11 SM_CONTEXT_PENDING (also 21 PDU_SESSION_REJECTED reject branch) ─── */
+
+SEC("uprobe/amf_pdu_create")
+int amf_pdu_create(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "SMPENDING:PduCreate", 19);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_smf_ctx_req")
+int amf_smf_ctx_req(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "SMPENDING:SmfCtxReq", 19);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 12 INITIAL_CONTEXT_SETUP ──────────────────────────────────────────── */
+
+SEC("uprobe/amf_ics_req")
+int amf_ics_req(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "ICS:Req", 7);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_ics_resp")
+int amf_ics_resp(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "ICS:RespMain", 12);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 13 REGISTERED_CONNECTED ───────────────────────────────────────────── */
+
+SEC("uprobe/amf_registered")
+int amf_registered(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "REGCONN:Registered", 18);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_reg_cmplt")
+int amf_reg_cmplt(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "REGCONN:Complete", 16);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 14 REG_REJECTED ───────────────────────────────────────────────────── */
+
+SEC("uprobe/amf_reg_reject")
+int amf_reg_reject(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "REGREJECT:Send", 14);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 15 AUTH_FAILED (also 16 REPLAY_SUSPECTED's SynchFailure branch,
+ * via amf_auth_fail from state 05) ───────────────────────────────────── */
+
+SEC("uprobe/amf_auth_fsm")
+int amf_auth_fsm(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "AUTHFAILED:FsmEvt", 17);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 17 SECURITY_FAILED ────────────────────────────────────────────────── */
+
+SEC("uprobe/amf_nas_decode")
+int amf_nas_decode(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "SECFAILED:Decode", 16);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 18 SECURITY_POLICY_VIOLATION ──────────────────────────────────────── */
+
+SEC("uprobe/amf_sel_sec_alg")
+int amf_sel_sec_alg(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "SECPOLICY:SelAlg", 16);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 19 NF_TIMEOUT ─────────────────────────────────────────────────────── */
+
+SEC("uprobe/amf_nssf_sel")
+int amf_nssf_sel(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "NFTIMEOUT:NssfSel", 17);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 20 SLICE_REJECTED ─────────────────────────────────────────────────── */
+
+SEC("uprobe/amf_nssai_req")
+int amf_nssai_req(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "SLICEREJ:NssaiReq", 17);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_5gsm_msg")
+int amf_5gsm_msg(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "SLICEREJ:5gsmMsg", 16);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 22 CONTEXT_SETUP_FAILED ───────────────────────────────────────────── */
+
+SEC("uprobe/amf_ics_fail")
+int amf_ics_fail(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "ICSFAILED:Main", 14);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── 23 CLEANUP_REQUIRED ───────────────────────────────────────────────── */
+
+SEC("uprobe/amf_remove_ue")
+int amf_remove_ue(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "CLEANUP:RemoveUe", 16);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_ue_remove")
+int amf_ue_remove(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "CLEANUP:UeRemove", 16);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+/* ── Part 3 — Supplementary / Edge-only hooks ──────────────────────────── */
+
+SEC("uprobe/amf_sec_ctx_ok")
+int amf_sec_ctx_ok(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "EDGE:SecCtxValid", 16);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_ics_disp")
+int amf_ics_disp(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "EDGE:IcsDispatch", 16);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_nas_disp")
+int amf_nas_disp(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "EDGE:NasDispatch", 16);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("uprobe/amf_fsm_event")
+int amf_fsm_event(struct pt_regs *ctx)
+{
+    struct event *e = new_event(EVT_API_CALL);
+    if (!e) return 0;
+    __builtin_memcpy(e->api, "EDGE:FsmSendEvent", 17);
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
 
 /* ═══════════════════════════════════════════════════════════════════════
- * AMF API uprobes
+ * AMF API uprobes — NOT part of the 23-state threat-aware FSM
+ * (internal/sbi/processor.(*Processor).* SBI-service callbacks; see
+ * amf/missing_attach_points.txt — none of these match the PDF hook points)
  * ═══════════════════════════════════════════════════════════════════════ */
+#if 0
 
 /* ── Subscription ───────────────────────────────────────────────────────── */
 
@@ -332,6 +825,8 @@ int amf_oam_ue_context(struct pt_regs *ctx)
     bpf_ringbuf_submit(e, 0);
     return 0;
 }
+
+#endif /* AMF API uprobes not in FSM */
 
 
 /* ═══════════════════════════════════════════════════════════════════════

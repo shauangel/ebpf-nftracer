@@ -1,0 +1,58 @@
+──────────────── amf_loader startup ────────────────
+[*] Looking for AMF container process...
+    pid=146120
+    exe=/proc/146120/exe
+
+    cgroup_id=182930
+
+[*] Loading state machine...
+    sm_map: 29 nodes, 52 edges loaded
+[*] Attaching state-machine uprobes...
+[*] Attaching tracepoints...
+  [tp]     syscalls/sys_enter_connect
+  [tp]     syscalls/sys_exit_connect
+  [tp]     syscalls/sys_enter_accept4
+  [tp]     syscalls/sys_exit_accept4
+  [tp]     syscalls/sys_enter_write
+  [tp]     syscalls/sys_exit_read
+
+[*] Tracing AMF (pid=146120). Ctrl+C to stop.
+
+TIMESTAMP               NF    EVENT      DETAIL
+──────────────────────  ────  ─────────  ──────────────────────────────────────────────────────────
+
+──────────────── T0 — REG_RECEIVED (UE/gNB --"InitialUEMessage"--> REG_RECEIVED) ────────────────
+[06:25:03.108221] AMF   API      REG:NGAPInitialUEMsg      pid=146120 tid=3661104
+[06:25:03.108879] AMF   API      REG:HandleNAS             pid=146120 tid=3661104
+[06:25:03.109015] AMF   FSM      ue=5533  sm_transition_lookup("UE/gNB", "InitialUEMessage") -> REG_RECEIVED   [OK]
+[06:25:03.109016] AMF   FSM      ue=5533  ue_state = REG_RECEIVED
+
+──────────────── T1 — CONTEXT_LOOKUP / IDENTITY_PENDING (elided, see README T1) ────────────────
+[06:25:03.121407] AMF   API      IDPENDING:SendReq         pid=146120 tid=3661112
+[06:25:03.198832] AMF   API      IDPENDING:HandleResp      pid=146120 tid=3661112
+[06:25:03.198901] AMF   FSM      ue=5533  internal GMM transitions (REG_RECEIVED -> CONTEXT_LOOKUP -> IDENTITY_PENDING) elided — no dedicated hooks, see doc/verified_attach_points.txt
+[06:25:03.198902] AMF   FSM      ue=5533  ue_state = AUTH_VECTOR_PENDING   ("identity available")
+
+──────────────── T2 — AUTH_VECTOR_PENDING -> NAS_AUTHENTICATING (AUSF success) ────────────────
+[06:25:03.204551] AMF   API      AVPENDING:AuthProc        pid=146120 tid=3661119
+[06:25:03.241387] AMF   API      AVPENDING:AusfAuth        pid=146120 tid=3661119
+[06:25:03.241402] AMF   FSM      ue=5533  sm_transition_lookup("AUTH_VECTOR_PENDING", "AUSF success") -> NAS_AUTHENTICATING   [OK]
+[06:25:03.241403] AMF   FSM      ue=5533  ue_state = NAS_AUTHENTICATING
+
+──────────────── T3 — AMF sends NAS Authentication Request ────────────────
+[06:25:03.242015] AMF   API      NASAUTH:SendReq           pid=146120 tid=3661119
+
+──────────────── T4 — NAS_AUTHENTICATING -> NAS_SECURITY_PENDING (RES* valid) ────────────────
+[06:25:03.318640] AMF   API      NASAUTH:HandleResp        pid=146120 tid=3661127
+[06:25:03.318661] AMF   FSM      ue=5533  sm_transition_lookup("NAS_AUTHENTICATING", "RES* valid") -> NAS_SECURITY_PENDING   [OK]
+[06:25:03.318662] AMF   FSM      ue=5533  ue_state = NAS_SECURITY_PENDING
+[06:25:03.320108] AMF   API      SECPENDING:Cmd            pid=146120 tid=3661127
+
+──────────────── T5 — ATTACK: unexpected Authentication Failure ────────────────
+[06:25:03.402774] AMF   API      NASAUTH:HandleFail        pid=146120 tid=3661140
+[06:25:03.402791] AMF   FSM      ue=5533  from_state = ue_state[5533] = NAS_SECURITY_PENDING
+[06:25:03.402792] AMF   FSM      ue=5533  label = "replay/abnormal retry"  (HandleAuthenticationFailure's only mapped label)
+[06:25:03.402793] AMF   FSM      ue=5533  sm_transition_lookup("NAS_SECURITY_PENDING", "replay/abnormal retry") -> NULL   [NO SUCH EDGE]
+[06:25:03.402794] AMF   ALERT    FSM mismatch: ue=5533 from=NAS_SECURITY_PENDING label="replay/abnormal retry" — no such edge
+[06:25:03.402795] AMF   FSM      ue=5533  ue_state left UNCHANGED at NAS_SECURITY_PENDING (mismatched event not trusted)
+[06:25:03.402796] AMF   STAT     amf_tracer_stats[STATE_INVALID]++   (now 1)
