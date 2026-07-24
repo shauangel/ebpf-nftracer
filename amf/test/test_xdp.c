@@ -26,8 +26,17 @@
  * bpf_xdp_detach(), i.e. libbpf >= 0.6), root (attaching an XDP program
  * and reading BPF maps both need real BPF/net privileges), the named
  * interface to already exist, and amf_xdp.o already built (`make` in
- * this directory). See xdp_test.md for a full walkthrough.
+ * this directory). See doc_xdp_test.md for a full walkthrough.
  */
+
+/* Must come before ANY system header: with -std=c11 (strict ISO C, see
+ * this directory's Makefile), glibc's <time.h> hides CLOCK_MONOTONIC/
+ * clock_gettime() (POSIX.1b real-time extensions) and <time.h>/<net/if.h>
+ * hide localtime_r()/if_nametoindex() unless a feature-test macro asks
+ * for POSIX explicitly -- unlike close()/unlink() etc. (POSIX baseline,
+ * exposed regardless), these need _POSIX_C_SOURCE >= 199309L. 200809L
+ * (POSIX.1-2008) covers all of them at once. */
+#define _POSIX_C_SOURCE 200809L
 
 #include <errno.h>
 #include <signal.h>
