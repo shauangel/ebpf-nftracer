@@ -1,0 +1,26 @@
+make: Entering directory '/home/t470/Desktop/ebpf-nftracer/amf/test'
+cc -std=c11 -Wall -Wextra -Wno-unused-parameter test_map_create.c -o test_map_create -lbpf -lelf -lz
+cc -std=c11 -Wall -Wextra -Wno-unused-parameter test_map_walk.c -o test_map_walk -lbpf -lelf -lz
+== test_map_create ==
+  FAIL [test_independent_creations_are_distinct_maps] test_map_create.c:95: bpf_map_lookup_elem(fd2, &key, &out) == -1 && errno == ENOENT
+test_map_create:
+  test_create_sm_nodes_map
+  test_create_sm_edges_map
+  test_independent_creations_are_distinct_maps
+  test_map_rejects_insert_past_max_entries
+  test_pin_and_reopen_resolve_to_same_map
+
+89 checks, 1 failed
+== test_map_walk ==
+  FAIL [test_point_lookup_known_entries] test_map_walk.c:239: bpf_map_lookup_elem(efd, &bogus, &bogus_val) == -1 && errno == ENOENT
+  FAIL [test_delete_elem_removed_from_walk] test_map_walk.c:257: bpf_map_lookup_elem(fd, &key, &val) == -1 && errno == ENOENT
+test_map_walk:
+  test_walk_visits_every_populated_node_exactly_once
+  test_walk_visits_every_populated_edge_exactly_once
+  test_walk_is_repeatable
+  test_point_lookup_known_entries
+  test_delete_elem_removed_from_walk
+
+106 checks, 2 failed
+make: *** [Makefile:38: test] Error 1
+make: Leaving directory '/home/t470/Desktop/ebpf-nftracer/amf/test'
