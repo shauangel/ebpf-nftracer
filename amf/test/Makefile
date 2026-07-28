@@ -24,7 +24,10 @@
 #                        (built here as amf_xdp.o, see the amf_xdp.o rule
 #                        below): attaches it to a real interface and
 #                        prints amf_xdp_stats/ue_state_map as real traffic
-#                        crosses it. See doc_xdp_test.md.
+#                        crosses it, plus an independent userspace
+#                        AF_PACKET SCTP/NGAP sniffer (mirrors
+#                        ../xdp_ngap.c's recognition logic, no separate
+#                        BPF object needed). See doc_xdp_test.md.
 
 CC       := cc
 CFLAGS   := -std=c11 -Wall -Wextra -Wno-unused-parameter
