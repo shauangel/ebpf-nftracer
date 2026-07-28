@@ -35,17 +35,6 @@ struct {
     __uint(max_entries, 1 << 16);
 } events SEC(".maps");
 
-// TEMPORARY: one-entry latch so handle_other() below captures/dumps only
-// the very first non-SCTP packet it sees, instead of one per packet.
-// Remove this map along with the capture code in handle_other() once the
-// manual inspection it's for is done.
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 1);
-    __type(key, __u32);
-    __type(value, __u8);
-} other_captured SEC(".maps");
-
 // Printing detail
 static __always_inline void dump_bytes(void *base, void *data_end) {
     for (int i = 0; i < 32; i++) {
@@ -168,20 +157,12 @@ static __always_inline int handle_tls(struct iphdr *iph, void *data_end)
     return XDP_PASS;
 }
 
-// DIAGNOSTIC / TEMPORARY: catch-all for anything that isn't SCTP. No
-// protocol-specific parsing -- just report source/destination IP, plus
-// (once only, via other_captured's latch) a raw byte dump of the very
-// first such packet, starting at the IP header itself, for manual
-// inspection. Remove the capture block below (and other_captured above)
-// once you've identified what's actually showing up here.
+// DIAGNOSTIC: catch-all for anything that isn't SCTP. No protocol-
+// specific parsing -- reports source/destination IP plus a raw byte dump
+// of EVERY such packet, starting at the IP header itself, for the loader
+// to print as readable characters.
 static __always_inline int handle_other(struct iphdr *iph, void *data_end)
 {
-    __u32 key = 0;
-    __u8 already = 0;
-    __u8 *captured = bpf_map_lookup_elem(&other_captured, &key);
-    if (captured)
-        already = *captured;
-
     struct xdp_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (e) {
         __builtin_memset(e, 0, sizeof(*e));
@@ -189,27 +170,21 @@ static __always_inline int handle_other(struct iphdr *iph, void *data_end)
         e->saddr = iph->saddr;
         e->daddr = iph->daddr;
 
-        if (!already) {
-            /* First non-SCTP packet seen -- dump raw bytes starting at
-             * the IP header itself (covers the IP header's own fields
-             * -- TTL, flags, options, ... -- plus whatever L4 protocol
-             * follows, in one capture). Same bounded, unrolled-loop
-             * pattern dump_bytes() above already uses, so it stays
-             * verifier-friendly. */
-            __u8 *src = (__u8 *)iph;
-            __u16 n = 0;
-            #pragma unroll
-            for (int i = 0; i < XDP_EVT_OTHER_RAW_MAX; i++) {
-                if ((void *)(src + i + 1) > data_end)
-                    break;
-                e->raw[i] = src[i];
-                n = i + 1;
-            }
-            e->raw_len = n;
-
-            __u8 one = 1;
-            bpf_map_update_elem(&other_captured, &key, &one, BPF_ANY);
+        /* Dump raw bytes starting at the IP header itself (covers the IP
+         * header's own fields -- TTL, flags, options, ... -- plus
+         * whatever L4 protocol follows, in one capture). Same bounded,
+         * unrolled-loop pattern dump_bytes() above already uses, so it
+         * stays verifier-friendly. */
+        __u8 *src = (__u8 *)iph;
+        __u16 n = 0;
+        #pragma unroll
+        for (int i = 0; i < XDP_EVT_OTHER_RAW_MAX; i++) {
+            if ((void *)(src + i + 1) > data_end)
+                break;
+            e->raw[i] = src[i];
+            n = i + 1;
         }
+        e->raw_len = n;
 
         bpf_ringbuf_submit(e, 0);
     }
@@ -237,10 +212,8 @@ int xdp_prog(struct xdp_md *ctx)
         return handle_sctp(iph, data_end);
 
     // DIAGNOSTIC: treat every other non-SCTP packet as "TCP" for this
-    // test and just report its src/dest IP via handle_other() -- bypasses
-    // handle_tls()'s TLS-record matching (and any protocol.== IPPROTO_TCP
-    // check) entirely, to isolate whether the problem is "no non-SCTP
-    // traffic is reaching this program at all" vs. "the TLS-record match
-    // itself is too narrow."
+    // test and report its src/dest IP + raw bytes via handle_other() --
+    // bypasses handle_tls()'s TLS-record matching entirely so every
+    // non-SCTP packet prints, not just the ones that look like TLS.
     return handle_other(iph, data_end);
 }

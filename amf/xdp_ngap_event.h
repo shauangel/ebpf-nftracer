@@ -31,9 +31,10 @@
 #define XDP_EVT_HTTPS 1   /* TCP payload starting with a TLS record (Handshake or Application Data) -- HTTPS is TLS, not plaintext HTTP, so this is identified at the TLS record layer, not by an HTTP request line */
 #define XDP_EVT_OTHER 2   /* DIAGNOSTIC: any non-SCTP packet, no protocol-specific parsing at all -- see handle_other() in xdp_ngap.c. Exists to check whether non-SCTP traffic reaches xdp_prog at all before narrowing back down to TLS/HTTPS specifically. */
 
-/* TEMPORARY: raw-byte capture size for XDP_EVT_OTHER's one-shot dump --
- * see handle_other()'s one-shot latch in xdp_ngap.c. Remove this and
- * raw/raw_len below once the manual inspection this exists for is done. */
+/* TEMPORARY: raw-byte capture size for XDP_EVT_OTHER -- every non-SCTP
+ * packet gets one of these (see handle_other() in xdp_ngap.c). Remove
+ * this and raw/raw_len below once the manual inspection this exists for
+ * is done. */
 #define XDP_EVT_OTHER_RAW_MAX 64
 
 /*
@@ -60,7 +61,7 @@ struct xdp_event {
     char  tls_record[8];              /* HTTPS: NUL-terminated TLS record tag -- "TLS-HS" (Handshake: ClientHello/ServerHello/...) or "TLS-AD" (Application Data: the encrypted HTTPS payload) */
 
     __u16 raw_len;                     /* OTHER (TEMPORARY): number of valid bytes in raw[] below */
-    __u8  raw[XDP_EVT_OTHER_RAW_MAX];   /* OTHER (TEMPORARY): raw bytes starting at the IP header itself (iph), for one-shot manual inspection of the very first non-SCTP packet seen -- see handle_other() in xdp_ngap.c */
+    __u8  raw[XDP_EVT_OTHER_RAW_MAX];   /* OTHER (TEMPORARY): raw bytes starting at the IP header itself (iph), for every non-SCTP packet -- see handle_other() in xdp_ngap.c. test_xdp.c prints these back as readable characters. */
 };
 
 #endif /* XDP_NGAP_EVENT_H */
