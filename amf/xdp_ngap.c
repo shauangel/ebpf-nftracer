@@ -157,34 +157,26 @@ static __always_inline int handle_tls(struct iphdr *iph, void *data_end)
     return XDP_PASS;
 }
 
-// SEC("xdp")
-// int xdp_prog(struct xdp_md *ctx)
-// {
-//     void *data = (void *)(long)ctx->data;
-//     void *data_end = (void *)(long)ctx->data_end;
+// DIAGNOSTIC: catch-all for anything that isn't SCTP. No protocol-
+// specific parsing at all -- just report source/destination IP, to check
+// whether non-SCTP traffic is reaching xdp_prog in the first place
+// before trying to narrow it back down to TLS/HTTPS specifically (see
+// xdp_prog()'s dispatch below -- handle_tls() is bypassed for now).
+static __always_inline int handle_other(struct iphdr *iph, void *data_end)
+{
+    (void)data_end; /* nothing past the IP header is touched for this test */
 
-//     // Check ethernet header size
-//     struct ethhdr *eth = data;
-//     if ((void *)(eth + 1) > data_end)
-//         return XDP_PASS;
+    struct xdp_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if (e) {
+        __builtin_memset(e, 0, sizeof(*e));
+        e->type  = XDP_EVT_OTHER;
+        e->saddr = iph->saddr;
+        e->daddr = iph->daddr;
+        bpf_ringbuf_submit(e, 0);
+    }
 
-//     // Check if the packet is IPv4
-//     struct iphdr *iph = (void *)(eth + 1);
-//     if ((void *)(iph + 1) > data_end)
-//     return XDP_PASS;
-
-//     // Only SCTP/NGAP and TCP/TLS (HTTPS) are of interest; everything else
-//     // (UDP, ICMP, ...) passes through untouched.
-//     if (iph->protocol == IPPROTO_SCTP)
-//         return handle_sctp(iph, data_end);
-
-//     if (iph->protocol == IPPROTO_TCP)
-//         return handle_tls(iph, data_end);
-
-//     return XDP_PASS;
-// }
-
-
+    return XDP_PASS;
+}
 
 SEC("xdp")
 int xdp_prog(struct xdp_md *ctx)
@@ -192,31 +184,24 @@ int xdp_prog(struct xdp_md *ctx)
     void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;
 
+    // Check ethernet header size
     struct ethhdr *eth = data;
     if ((void *)(eth + 1) > data_end)
         return XDP_PASS;
 
-    __u16 eth_proto = bpf_ntohs(eth->h_proto);
-
-    if (eth_proto != ETH_P_IP)
-        return XDP_PASS;
-
+    // Check if the packet is IPv4
     struct iphdr *iph = (void *)(eth + 1);
     if ((void *)(iph + 1) > data_end)
-        return XDP_PASS;
-
-    if (iph->version != 4 || iph->ihl < 5)
-        return XDP_PASS;
-
-    __u32 ip_hdr_len = iph->ihl * 4;
-    if ((void *)iph + ip_hdr_len > data_end)
-        return XDP_PASS;
+    return XDP_PASS;
 
     if (iph->protocol == IPPROTO_SCTP)
         return handle_sctp(iph, data_end);
 
-    if (iph->protocol == IPPROTO_TCP)
-        return handle_tls(iph, data_end);
-
-    return XDP_PASS;
+    // DIAGNOSTIC: treat every other non-SCTP packet as "TCP" for this
+    // test and just report its src/dest IP via handle_other() -- bypasses
+    // handle_tls()'s TLS-record matching (and any protocol.== IPPROTO_TCP
+    // check) entirely, to isolate whether the problem is "no non-SCTP
+    // traffic is reaching this program at all" vs. "the TLS-record match
+    // itself is too narrow."
+    return handle_other(iph, data_end);
 }

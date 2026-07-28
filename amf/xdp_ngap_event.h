@@ -29,6 +29,7 @@
 
 #define XDP_EVT_NGAP  0   /* SCTP DATA chunk carrying an NGAP PDU (PPID 60) */
 #define XDP_EVT_HTTPS 1   /* TCP payload starting with a TLS record (Handshake or Application Data) -- HTTPS is TLS, not plaintext HTTP, so this is identified at the TLS record layer, not by an HTTP request line */
+#define XDP_EVT_OTHER 2   /* DIAGNOSTIC: any non-SCTP packet, no protocol-specific parsing at all -- see handle_other() in xdp_ngap.c. Exists to check whether non-SCTP traffic reaches xdp_prog at all before narrowing back down to TLS/HTTPS specifically. */
 
 /*
  * Field usage by type:
@@ -36,6 +37,7 @@
  *   XDP_EVT_NGAP  -> type, saddr, daddr, sport, dport, chunk_len,
  *                    procedure_code, criticality
  *   XDP_EVT_HTTPS -> type, saddr, daddr, sport, dport, tls_record
+ *   XDP_EVT_OTHER -> type, saddr, daddr only
  */
 struct xdp_event {
     __u8  type;              /* XDP_EVT_* */

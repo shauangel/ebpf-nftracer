@@ -124,6 +124,11 @@ static int handle_xdp_event(void *ctx, void *data, size_t data_sz)
         LOG("HTTPS %s:%u -> %s:%u  %s",
             src, e->sport, dst, e->dport, e->tls_record);
         break;
+    case XDP_EVT_OTHER:
+        /* DIAGNOSTIC event -- see handle_other() in ../xdp_ngap.c. Only
+         * src/dest IP are populated for this type, no ports. */
+        LOG("OTHER %s -> %s", src, dst);
+        break;
     default:
         LOG("xdp_event: unknown type=%u from %s:%u -> %s:%u", e->type, src, e->sport, dst, e->dport);
         break;
