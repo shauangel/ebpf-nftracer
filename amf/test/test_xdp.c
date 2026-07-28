@@ -80,7 +80,8 @@ struct ue_val {
 };
 
 static volatile sig_atomic_t g_stop;
-static void handle_signal(int sig) { (void)sig; g_stop = 1; }
+static volatile sig_atomic_t g_stop_signal; /* which signal set g_stop -- see the SIGINT/SIGTERM print near main()'s cleanup */
+static void handle_signal(int sig) { g_stop = 1; g_stop_signal = sig; }
 
 /* bpf_ktime_get_ns() (what amf_xdp.c stamps ue_val.last_seen_ns with)
  * returns nanoseconds since boot, i.e. CLOCK_MONOTONIC -- this is the
@@ -216,11 +217,50 @@ int main(int argc, char **argv)
     printf("\n[*] Watching %s. Send it real SCTP/NGAP and HTTP traffic and compare.\n", ifname);
     printf("[*] Ctrl+C to detach and exit.\n\n");
 
+    int iface_lost = 0; /* set below if the interface vanishes out from under us -- see the ifindex check each tick */
+
     uint64_t last[STAT_MAX] = {0};
     while (!g_stop) {
         sleep(1); /* interrupted early (EINTR) by Ctrl+C -- the `while (!g_stop)` check below catches that */
         if (g_stop)
             break;
+
+        /* An XDP attachment lives on the net_device, not on the
+         * interface NAME -- if whatever owns this veth (commonly: Docker
+         * recreating a container's network namespace when that container
+         * restarts, e.g. an AMF/gNB container restarting as part of
+         * bringing up a UE simulator) tears the device down and rebuilds
+         * it, the OLD device -- and our XDP attachment to it -- is simply
+         * gone. The new device, even with the identical name, has a
+         * different ifindex. Nothing above would notice that on its own
+         * (this process still holds valid fds for the maps, which are
+         * independent of the netdevice), so check for it explicitly every
+         * tick instead of silently going quiet. */
+        unsigned int cur_ifindex = if_nametoindex(ifname);
+        if (cur_ifindex == 0) {
+            print_ts();
+            printf("interface \"%s\" no longer exists (was ifindex %u).\n", ifname, ifindex);
+            printf("    Something outside this process removed it -- most likely a container\n");
+            printf("    (AMF/gNB/UE-simulator) that owns the other end of this veth was\n");
+            printf("    restarted, which destroys and (if it comes back) recreates the whole\n");
+            printf("    device. The XDP attachment was destroyed along with the old device;\n");
+            printf("    there is nothing left here to detach. Re-run test_xdp once \"%s\"\n", ifname);
+            printf("    exists again.\n");
+            iface_lost = 1;
+            break;
+        }
+        if (cur_ifindex != ifindex) {
+            print_ts();
+            printf("interface \"%s\" was recreated (ifindex %u -> %u) -- re-attaching...\n",
+                   ifname, ifindex, cur_ifindex);
+            if (bpf_xdp_attach((int)cur_ifindex, prog_fd, xdp_flags, NULL) != 0) {
+                fprintf(stderr, "    re-attach failed: %s\n", strerror(errno));
+                iface_lost = 1;
+                break;
+            }
+            ifindex = cur_ifindex;
+            printf("    re-attached to ifindex %u.\n", ifindex);
+        }
 
         uint64_t cur[STAT_MAX];
         int changed = 0;
@@ -246,7 +286,16 @@ int main(int argc, char **argv)
         memcpy(last, cur, sizeof(last));
     }
 
-    printf("\n[*] Detaching from %s...\n", ifname);
+    if (iface_lost) {
+        /* Nothing to detach -- see the diagnostic already printed above
+         * (either the interface is gone entirely, or we failed to
+         * re-attach to its replacement). */
+        bpf_object__close(obj);
+        return 1;
+    }
+
+    printf("\n[*] Received signal %d (%s) -- detaching from %s...\n",
+           (int)g_stop_signal, strsignal((int)g_stop_signal), ifname);
     if (bpf_xdp_detach((int)ifindex, xdp_flags, NULL) != 0)
         fprintf(stderr, "test_xdp: bpf_xdp_detach(%s): %s\n", ifname, strerror(errno));
 

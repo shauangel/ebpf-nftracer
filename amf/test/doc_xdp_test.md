@@ -155,15 +155,64 @@ detach loop that role doesn't otherwise need:
      a real production `amf_xdp.o` that's already running on the same
      interface.
 6. **Install signal handlers** (`SIGINT`/`SIGTERM` → set a
-   `volatile sig_atomic_t g_stop`), same pattern `../amf_loader.c` uses.
-7. **Monitor loop:** once a second, read all three `amf_xdp_stats`
-   counters; if any changed since the last tick, print a timestamped
-   summary line (`PASS=n(+d) DROP=n(+d) STATE_INVALID=n(+d)`) plus a full
-   `dump_ue_state_map()`. Stays silent on ticks where nothing changed,
-   rather than printing a heartbeat line every second regardless.
-8. **On Ctrl+C:** `bpf_xdp_detach(ifindex, xdp_flags, NULL)` removes the
-   program from the interface, then `bpf_object__close(obj)` closes the
+   `volatile sig_atomic_t g_stop`, and record which signal in
+   `g_stop_signal` so the final message can name it), same pattern
+   `../amf_loader.c` uses.
+7. **Monitor loop:** once a second:
+   - **Check the interface itself is still the same device.** An XDP
+     attachment lives on the kernel `net_device`, not on the interface
+     *name* — if whatever owns this veth destroys and rebuilds it (by far
+     the most common cause: a container that owns the other end
+     restarting, e.g. an AMF/gNB container restarting as part of bringing
+     up a UE simulator), the XDP attachment is destroyed right along with
+     the old device, silently, with no signal delivered to this process
+     at all. `if_nametoindex(ifname)` is re-checked every tick against the
+     `ifindex` recorded at attach time:
+     - **Same ifindex:** nothing to do, proceed to the stats check below.
+     - **Different ifindex:** the device was torn down and a new one
+       (with the same name) took its place — print that explicitly and
+       `bpf_xdp_attach()` again onto the new ifindex, so the monitor keeps
+       working across a container restart instead of going silently dark.
+     - **ifindex 0 (name doesn't resolve at all):** the interface is
+       simply gone and hasn't come back — print a diagnostic explaining
+       there's nothing left to detach, and exit (`iface_lost = 1`).
+   - **Read `amf_xdp_stats`.** If any of the three counters changed since
+     the last tick, print a timestamped summary line
+     (`PASS=n(+d) DROP=n(+d) STATE_INVALID=n(+d)`) plus a full
+     `dump_ue_state_map()`. Stays silent on ticks where nothing changed
+     (interface included), rather than printing a heartbeat line every
+     second regardless.
+8. **On exit:** if the loop broke because the interface was lost, there's
+   nothing to detach (already reported above) — just close `obj` and
+   return non-zero. Otherwise (Ctrl+C / `SIGTERM`), print which signal was
+   received, `bpf_xdp_detach(ifindex, xdp_flags, NULL)` to remove the
+   program from the interface, then `bpf_object__close(obj)` to close the
    program fd and every map fd this object owns.
+
+### Why the interface-recreation check matters in practice
+
+If you attach this monitor and then start a UE/gNB simulator (e.g.
+UERANSIM) that causes the AMF (or whatever container owns the other end of
+`veth5538fab`) to restart, Docker tears down that container's network
+namespace and builds a brand new veth pair — even if the host-side name
+comes back identical, it's a **different kernel object** with a
+**different ifindex**, and the XDP program that was attached to the old
+one is simply gone; nothing "detached" it in the sense of an explicit
+`bpf_xdp_detach()` call, the whole device it was attached to stopped
+existing. Before this check existed, the monitor would just keep running
+in that state, holding real (but now-orphaned) map fds, printing nothing,
+looking indistinguishable from "there's no traffic yet." The check above
+makes that state visible immediately and, when the interface reappears
+under the same name, self-heals by re-attaching rather than requiring a
+manual restart.
+
+If you instead see `test_xdp` itself print
+`[*] Received signal N (...) -- detaching from ...` right after starting
+the other tool, that's a *different* situation: something is actually
+sending this process `SIGINT`/`SIGTERM` (a broad `pkill`, a shared process
+group being torn down, the terminal session itself being recycled) — not
+an interface problem at all. The two cases now produce visibly different
+output, which earlier revisions of this file did not distinguish.
 
 ## Notes / things this monitor deliberately does NOT do
 
