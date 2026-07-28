@@ -157,24 +157,61 @@ static __always_inline int handle_tls(struct iphdr *iph, void *data_end)
     return XDP_PASS;
 }
 
+// SEC("xdp")
+// int xdp_prog(struct xdp_md *ctx)
+// {
+//     void *data = (void *)(long)ctx->data;
+//     void *data_end = (void *)(long)ctx->data_end;
+
+//     // Check ethernet header size
+//     struct ethhdr *eth = data;
+//     if ((void *)(eth + 1) > data_end)
+//         return XDP_PASS;
+
+//     // Check if the packet is IPv4
+//     struct iphdr *iph = (void *)(eth + 1);
+//     if ((void *)(iph + 1) > data_end)
+//     return XDP_PASS;
+
+//     // Only SCTP/NGAP and TCP/TLS (HTTPS) are of interest; everything else
+//     // (UDP, ICMP, ...) passes through untouched.
+//     if (iph->protocol == IPPROTO_SCTP)
+//         return handle_sctp(iph, data_end);
+
+//     if (iph->protocol == IPPROTO_TCP)
+//         return handle_tls(iph, data_end);
+
+//     return XDP_PASS;
+// }
+
+
+
 SEC("xdp")
 int xdp_prog(struct xdp_md *ctx)
 {
     void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;
 
-    // Check ethernet header size
     struct ethhdr *eth = data;
     if ((void *)(eth + 1) > data_end)
         return XDP_PASS;
 
-    // Check if the packet is IPv4
+    __u16 eth_proto = bpf_ntohs(eth->h_proto);
+
+    if (eth_proto != ETH_P_IP)
+        return XDP_PASS;
+
     struct iphdr *iph = (void *)(eth + 1);
     if ((void *)(iph + 1) > data_end)
-    return XDP_PASS;
+        return XDP_PASS;
 
-    // Only SCTP/NGAP and TCP/TLS (HTTPS) are of interest; everything else
-    // (UDP, ICMP, ...) passes through untouched.
+    if (iph->version != 4 || iph->ihl < 5)
+        return XDP_PASS;
+
+    __u32 ip_hdr_len = iph->ihl * 4;
+    if ((void *)iph + ip_hdr_len > data_end)
+        return XDP_PASS;
+
     if (iph->protocol == IPPROTO_SCTP)
         return handle_sctp(iph, data_end);
 
