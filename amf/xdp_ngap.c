@@ -29,18 +29,13 @@ struct sctp_data_chunk {
 
 char LICENSE[] SEC("license") = "GPL";
 
-/* Reported NGAP DATA chunks used to only go to bpf_printk() (visible via
- * `sudo cat /sys/kernel/debug/tracing/trace_pipe`); now they're submitted
- * here instead, for test/test_xdp.c to poll and print directly -- same
- * ringbuf + userspace ring_buffer__poll() pattern amf_tracer.bpf.c /
- * amf_loader.c already use, just this program's own private ringbuf and
- * record type (see xdp_ngap_event.h). HTTP/1.x requests and responses
- * share this same ringbuf, tagged via struct xdp_event's `type` field. */
+// Ring buffer for reporting XDP events
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 1 << 16);   /* 64 KB -- neither NGAP nor incidental HTTP traffic here is high-rate, no need for amf_tracer.bpf.c's 16 MB */
+    __uint(max_entries, 1 << 16);
 } events SEC(".maps");
 
+// Printing detail
 static __always_inline void dump_bytes(void *base, void *data_end) {
     for (int i = 0; i < 32; i++) {
         if (base + i + 1 > data_end)
@@ -51,15 +46,9 @@ static __always_inline void dump_bytes(void *base, void *data_end) {
     }
 }
 
-/* SCTP/NGAP: unchanged logic from before HTTP was added, just pulled out
- * into its own function so xdp_prog() can branch on iph->protocol
- * instead of returning early inline. Identifies NGAP the same way it
- * always did -- not by port, but by the SCTP DATA chunk's PPID (60 is
- * IANA-assigned to NGAP), the wire-level equivalent of the HTTP method
- * check handle_tcp() below does for its own protocol. */
+//  Get SCTP header and data chunk
 static __always_inline int handle_sctp(struct iphdr *iph, void *data_end)
 {
-    /* ---- Get SCTP header and data chunk ---- */
     // IP header length may be > 20 bytes
     void *sctp_ptr = (void *)iph + (iph->ihl * 4);
 
@@ -95,10 +84,7 @@ static __always_inline int handle_sctp(struct iphdr *iph, void *data_end)
     __u16 procedure_code = ((__u16)b0 << 8) | b1;
     __u8 criticality = b2;
 
-    /* Report this NGAP DATA chunk to the loader instead of bpf_printk()
-     * -- reserve a slot, fill it, submit. A NULL reserve (ringbuf full)
-     * just means this one event is dropped; never worth failing the
-     * packet over, so fall through to XDP_PASS either way. */
+    /* Report this NGAP DATA chunk to the loader */
     struct xdp_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (e) {
         __builtin_memset(e, 0, sizeof(*e));
@@ -116,15 +102,11 @@ static __always_inline int handle_sctp(struct iphdr *iph, void *data_end)
     return XDP_PASS;
 }
 
-/* TCP/HTTP: same shallow, wire-only inspection depth as handle_sctp()
- * above -- no full HTTP parse, just enough to tell "this looks like an
- * HTTP/1.x request or response line" from the first few bytes of the TCP
- * payload. Deliberately NOT filtered by port (unlike a typical "port 80"
- * check): SCTP/NGAP above is identified by wire content (the DATA
- * chunk's PPID), not by port either, so this stays consistent with that
- * same content-based approach rather than assuming HTTP only ever runs
- * on one specific port. */
-static __always_inline int handle_tcp(struct iphdr *iph, void *data_end)
+// Get TCP header and TLS record (HTTPS is TLS -- there is no plaintext
+// HTTP request line to match here, so identification happens at the TLS
+// record layer instead, the same "read a few fixed wire bytes, no deep
+// parse" depth handle_sctp() uses for NGAP).
+static __always_inline int handle_tls(struct iphdr *iph, void *data_end)
 {
     void *tcp_ptr = (void *)iph + (iph->ihl * 4);
 
@@ -134,49 +116,41 @@ static __always_inline int handle_tcp(struct iphdr *iph, void *data_end)
 
     // TCP header length may be > 20 bytes (options present)
     void *payload = (void *)tcp + (tcp->doff * 4);
-    if (payload + 4 > data_end)
-        return XDP_PASS; /* no ACK-only/empty segment has enough bytes to be a request/status line */
+    if (payload + 5 > data_end)
+        return XDP_PASS; /* not enough bytes for a TLS record header (type[1] + version[2] + length[2]) */
 
-    __u8 c0 = *(__u8 *)(payload + 0);
-    __u8 c1 = *(__u8 *)(payload + 1);
-    __u8 c2 = *(__u8 *)(payload + 2);
-    __u8 c3 = *(__u8 *)(payload + 3);
+    __u8 content_type = *(__u8 *)(payload + 0);
+    __u8 ver_major     = *(__u8 *)(payload + 1);
 
-    /* Match the first 3-4 bytes against common HTTP/1.x request methods
-     * and the "HTTP/" response status-line prefix -- a fixed, bounded set
-     * of literal comparisons (verifier-friendly; no scanning/loops over
-     * unknown-length data), same trick used elsewhere in eBPF for cheap
-     * L7 protocol sniffing. */
-    char method[8] = {};
+    /* TLS record layer: ContentType 0x16 (Handshake -- ClientHello,
+     * ServerHello, Certificate, ...) or 0x17 (Application Data -- the
+     * actual encrypted HTTPS payload after the handshake completes),
+     * with a TLS-range major version. Every TLS version, including 1.3,
+     * advertises major=3 at the record layer (TLS 1.3's real version
+     * lives in an extension instead, for middlebox compatibility), so
+     * checking major==3 alone covers SSLv3 through TLS 1.3 without
+     * needing to special-case any of them. Not filtered by port 443 --
+     * same content-based-not-port-based approach handle_sctp() uses for
+     * NGAP via the SCTP DATA chunk's PPID. */
+    if (ver_major != 0x03)
+        return XDP_PASS;
 
-    if (c0=='G' && c1=='E' && c2=='T' && c3==' ')
-        __builtin_memcpy(method, "GET", 4);
-    else if (c0=='P' && c1=='O' && c2=='S' && c3=='T')
-        __builtin_memcpy(method, "POST", 5);
-    else if (c0=='P' && c1=='U' && c2=='T' && c3==' ')
-        __builtin_memcpy(method, "PUT", 4);
-    else if (c0=='H' && c1=='E' && c2=='A' && c3=='D')
-        __builtin_memcpy(method, "HEAD", 5);
-    else if (c0=='D' && c1=='E' && c2=='L' && c3=='E')
-        __builtin_memcpy(method, "DELETE", 7);
-    else if (c0=='P' && c1=='A' && c2=='T' && c3=='C')
-        __builtin_memcpy(method, "PATCH", 6);
-    else if (c0=='O' && c1=='P' && c2=='T' && c3=='I')
-        __builtin_memcpy(method, "OPTIONS", 8);
-    else if (c0=='H' && c1=='T' && c2=='T' && c3=='P')
-        __builtin_memcpy(method, "HTTP", 5); /* response status line, e.g. "HTTP/1.1 200 OK" */
-    else
-        return XDP_PASS; /* not a recognizable HTTP/1.x line -- ordinary TCP traffic, ignore */
+    char tls_record[8] = {};
+    switch (content_type) {
+    case 0x16: __builtin_memcpy(tls_record, "TLS-HS", 7); break; /* Handshake */
+    case 0x17: __builtin_memcpy(tls_record, "TLS-AD", 7); break; /* Application Data */
+    default:   return XDP_PASS; /* not a TLS record we care about (e.g. 0x14 change_cipher_spec, 0x15 alert) */
+    }
 
     struct xdp_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (e) {
         __builtin_memset(e, 0, sizeof(*e));
-        e->type  = XDP_EVT_HTTP;
+        e->type  = XDP_EVT_HTTPS;
         e->saddr = iph->saddr;
         e->daddr = iph->daddr;
         e->sport = bpf_ntohs(tcp->source);
         e->dport = bpf_ntohs(tcp->dest);
-        __builtin_memcpy(e->method, method, sizeof(e->method));
+        __builtin_memcpy(e->tls_record, tls_record, sizeof(e->tls_record));
         bpf_ringbuf_submit(e, 0);
     }
 
@@ -199,13 +173,13 @@ int xdp_prog(struct xdp_md *ctx)
     if ((void *)(iph + 1) > data_end)
     return XDP_PASS;
 
-    // Only SCTP/NGAP and TCP/HTTP are of interest; everything else
+    // Only SCTP/NGAP and TCP/TLS (HTTPS) are of interest; everything else
     // (UDP, ICMP, ...) passes through untouched.
     if (iph->protocol == IPPROTO_SCTP)
         return handle_sctp(iph, data_end);
 
     if (iph->protocol == IPPROTO_TCP)
-        return handle_tcp(iph, data_end);
+        return handle_tls(iph, data_end);
 
     return XDP_PASS;
 }

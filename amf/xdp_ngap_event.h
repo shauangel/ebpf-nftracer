@@ -20,22 +20,22 @@
  * struct event (amf_tracer.bpf.c's own uprobe/tracepoint schema).
  *
  * xdp_ngap.c now gathers two kinds of traffic on the same interface --
- * SCTP/NGAP (the original purpose) and, alongside it, plain TCP/HTTP --
+ * SCTP/NGAP (the original purpose) and, alongside it, TCP/TLS (HTTPS) --
  * so one record type has to represent both, same way struct event in
  * ../events.h represents EVT_API_CALL/EVT_CONNECT/EVT_WRITE/etc: a `type`
  * tag plus a comment documenting which fields apply to which type. All
  * fields not used by a given type are zeroed by xdp_ngap.c.
  */
 
-#define XDP_EVT_NGAP 0   /* SCTP DATA chunk carrying an NGAP PDU (PPID 60) */
-#define XDP_EVT_HTTP 1   /* TCP payload starting with a recognized HTTP/1.x request or response line */
+#define XDP_EVT_NGAP  0   /* SCTP DATA chunk carrying an NGAP PDU (PPID 60) */
+#define XDP_EVT_HTTPS 1   /* TCP payload starting with a TLS record (Handshake or Application Data) -- HTTPS is TLS, not plaintext HTTP, so this is identified at the TLS record layer, not by an HTTP request line */
 
 /*
  * Field usage by type:
  *
- *   XDP_EVT_NGAP -> type, saddr, daddr, sport, dport, chunk_len,
- *                   procedure_code, criticality
- *   XDP_EVT_HTTP -> type, saddr, daddr, sport, dport, method
+ *   XDP_EVT_NGAP  -> type, saddr, daddr, sport, dport, chunk_len,
+ *                    procedure_code, criticality
+ *   XDP_EVT_HTTPS -> type, saddr, daddr, sport, dport, tls_record
  */
 struct xdp_event {
     __u8  type;              /* XDP_EVT_* */
@@ -50,7 +50,7 @@ struct xdp_event {
     __u16 procedure_code;          /* NGAP: procedureCode, HOST byte order */
     __u8  criticality;               /* NGAP: criticality byte, as-is off the wire */
 
-    char  method[8];                  /* HTTP: NUL-terminated request method, or "HTTP" for a response status line */
+    char  tls_record[8];              /* HTTPS: NUL-terminated TLS record tag -- "TLS-HS" (Handshake: ClientHello/ServerHello/...) or "TLS-AD" (Application Data: the encrypted HTTPS payload) */
 };
 
 #endif /* XDP_NGAP_EVENT_H */

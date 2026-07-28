@@ -96,8 +96,8 @@ static void print_ts(FILE *f)
     } while (0)
 
 /* ring_buffer__new()'s callback -- fires once per struct xdp_event
- * xdp_prog() submits, whether that's a real NGAP DATA chunk or an
- * HTTP/1.x request/response line (see xdp_ngap_event.h's XDP_EVT_*).
+ * xdp_prog() submits, whether that's a real NGAP DATA chunk or a TLS
+ * (HTTPS) record (see xdp_ngap_event.h's XDP_EVT_*).
  * This is "the trace ... show[ing] in the loader": previously the only
  * way to see the NGAP side of this was `sudo cat /sys/kernel/debug/
  * tracing/trace_pipe` catching xdp_ngap.c's old bpf_printk() calls; now
@@ -120,9 +120,9 @@ static int handle_xdp_event(void *ctx, void *data, size_t data_sz)
         LOG("NGAP  %s:%u -> %s:%u  len=%u  procedureCode=%u  criticality=%u",
             src, e->sport, dst, e->dport, e->chunk_len, e->procedure_code, e->criticality);
         break;
-    case XDP_EVT_HTTP:
-        LOG("HTTP  %s:%u -> %s:%u  %s",
-            src, e->sport, dst, e->dport, e->method);
+    case XDP_EVT_HTTPS:
+        LOG("HTTPS %s:%u -> %s:%u  %s",
+            src, e->sport, dst, e->dport, e->tls_record);
         break;
     default:
         LOG("xdp_event: unknown type=%u from %s:%u -> %s:%u", e->type, src, e->sport, dst, e->dport);
@@ -283,7 +283,7 @@ int main(int argc, char **argv)
     while (!stop) {
         /* Doubles as the watchdog's tick AND the event drain: blocks up
          * to POLL_INTERVAL_SEC, waking early to invoke handle_xdp_event()
-         * as soon as xdp_prog() submits one, so NGAP/HTTP reports show up
+         * as soon as xdp_prog() submits one, so NGAP/HTTPS reports show up
          * with real latency instead of only once per tick. A negative
          * return other than -EINTR (this process's own SIGINT/SIGTERM
          * handler interrupting the wait) is a real libbpf
