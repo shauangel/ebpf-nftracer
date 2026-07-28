@@ -96,6 +96,97 @@ static void print_ts(FILE *f)
         printf("\n"); \
     } while (0)
 
+/* ── lightweight IP/TCP header decoder for XDP_EVT_OTHER's raw[] dump ───
+ * Pure userspace, parses the same bytes the hex dump already shows --
+ * no BPF-side changes needed. Only decodes what's needed to tell a real
+ * header apart from noise: IP version/IHL/total_len/ttl/proto, and (for
+ * TCP) ports/seq/ack/flags/window. No options beyond that, no payload
+ * parsing -- "lightweight" on purpose, not a full protocol stack. */
+
+static const char *ip_proto_name(__u8 proto)
+{
+    switch (proto) {
+    case 1:   return "ICMP";
+    case 6:   return "TCP";
+    case 17:  return "UDP";
+    case 132: return "SCTP";
+    default:  return "?";
+    }
+}
+
+/* TCP flags byte -> "SYN,ACK" style string. Order matches how they're
+ * conventionally listed (tcpdump-style), not bit order. */
+static void decode_tcp_flags(__u8 flags, char *out, size_t out_sz)
+{
+    static const struct { __u8 bit; const char *name; } known[] = {
+        { 0x20, "URG" }, { 0x10, "ACK" }, { 0x08, "PSH" },
+        { 0x04, "RST" }, { 0x02, "SYN" }, { 0x01, "FIN" },
+    };
+    out[0] = '\0';
+    for (size_t i = 0; i < sizeof(known) / sizeof(known[0]); i++) {
+        if (!(flags & known[i].bit))
+            continue;
+        if (out[0])
+            strncat(out, ",", out_sz - strlen(out) - 1);
+        strncat(out, known[i].name, out_sz - strlen(out) - 1);
+    }
+    if (!out[0])
+        strncpy(out, "-", out_sz - 1);
+}
+
+/* Decodes raw[0..raw_len) as an IPv4 header, then (if protocol == TCP
+ * and enough bytes were captured) the TCP header right after it. Prints
+ * "(too short)"/partial info rather than guessing at missing bytes --
+ * raw[] is a fixed 64-byte capture (see XDP_EVT_OTHER_RAW_MAX), so a
+ * packet with TCP options can easily have its payload (or even the full
+ * TCP header) cut off. */
+static void decode_ip_packet(const __u8 *raw, __u16 raw_len)
+{
+    if (raw_len < 20) {
+        printf("    (too short to decode: %u bytes, need >= 20 for an IP header)\n", raw_len);
+        return;
+    }
+
+    __u8  version   = raw[0] >> 4;
+    __u8  ihl       = (raw[0] & 0x0F) * 4; /* IHL is in 32-bit words */
+    __u16 total_len = ((__u16)raw[2] << 8) | raw[3];
+    __u8  ttl       = raw[8];
+    __u8  proto     = raw[9];
+
+    printf("    IP:  v=%u ihl=%u total_len=%u ttl=%u proto=%s(%u)\n",
+           version, ihl, total_len, ttl, ip_proto_name(proto), proto);
+
+    if (proto != 6 /* TCP */)
+        return;
+    if (raw_len < (__u16)(ihl + 20)) {
+        printf("    TCP: (header cut off -- only %u of >= %u bytes captured)\n",
+               raw_len, ihl + 20);
+        return;
+    }
+
+    const __u8 *tcp   = raw + ihl;
+    __u16 sport       = ((__u16)tcp[0] << 8) | tcp[1];
+    __u16 dport       = ((__u16)tcp[2] << 8) | tcp[3];
+    __u32 seq         = ((__u32)tcp[4] << 24) | ((__u32)tcp[5] << 16) | ((__u32)tcp[6] << 8) | tcp[7];
+    __u32 ack         = ((__u32)tcp[8] << 24) | ((__u32)tcp[9] << 16) | ((__u32)tcp[10] << 8) | tcp[11];
+    __u8  doff        = (tcp[12] >> 4) * 4; /* TCP data offset, in 32-bit words */
+    __u8  flags       = tcp[13];
+    __u16 window      = ((__u16)tcp[14] << 8) | tcp[15];
+
+    char flag_str[32];
+    decode_tcp_flags(flags, flag_str, sizeof(flag_str));
+
+    printf("    TCP: sport=%u dport=%u seq=%u ack=%u flags=[%s] window=%u hdrlen=%u\n",
+           sport, dport, seq, ack, flag_str, window, doff);
+
+    __u16 hdrs_len = ihl + doff;
+    if (raw_len > hdrs_len)
+        printf("    payload: %u byte(s) follow the TCP header in this capture\n",
+               raw_len - hdrs_len);
+    else
+        printf("    payload: none (pure control segment, e.g. handshake/teardown)\n");
+}
+
 /* ring_buffer__new()'s callback -- fires once per struct xdp_event
  * xdp_prog() submits, whether that's a real NGAP DATA chunk or a TLS
  * (HTTPS) record (see xdp_ngap_event.h's XDP_EVT_*).
@@ -130,11 +221,14 @@ static int handle_xdp_event(void *ctx, void *data, size_t data_sz)
          * ../xdp_ngap.c, fires for every non-SCTP packet with a raw byte
          * dump starting at the IP header (confirmed to sit right at
          * pkt+14 -- see the earlier pkt_addr/iph_addr capture this
-         * replaced). Standard hex+ASCII dump: each row is 16 bytes as
-         * hex, then the same bytes rendered as characters (printable
-         * bytes as themselves, everything else as '.'). */
+         * replaced). decode_ip_packet() pulls out the fields actually
+         * worth reading (proto, ports, TCP flags, ...); the hex+ASCII
+         * dump underneath is the raw ground truth in case the decoder
+         * misses something (a fragmented/malformed header, non-TCP
+         * traffic, etc). */
         LOG("OTHER %s -> %s  (%u raw bytes captured, IP header onward)",
             src, dst, e->raw_len);
+        decode_ip_packet(e->raw, e->raw_len);
         for (__u16 off = 0; off < e->raw_len; off += 16) {
             char hex[16 * 3 + 1] = {0};
             char ascii[17] = {0};
