@@ -175,9 +175,3 @@ structural, not signature-based. A CHECK() backs this: T5 unexpectedly
 *hitting* (i.e. the attack sailing through) fails the test, same as any
 T0-T4 step unexpectedly *missing* (a real registration step being wrongly
 rejected) would.
-
-## See also
-
-[`xdp_test.md`](xdp_test.md) — tests for `../amf_xdp.c` (`test_xdp.c`),
-the XDP program that shares `sm_nodes`/`sm_edges` with the maps tested
-here but adds real packet parsing (SCTP/NGAP vs. everything else) on top.
