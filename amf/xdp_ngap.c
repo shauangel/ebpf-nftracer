@@ -163,7 +163,17 @@ static __always_inline int handle_tls(struct iphdr *iph, void *data_end)
 // the earlier pkt_addr/iph_addr capture to sit right at pkt+14, i.e.
 // pkt+sizeof(struct ethhdr), same as any standard untagged Ethernet
 // frame), for the loader to print as a hex+ASCII dump.
-static __always_inline int handle_other(struct iphdr *iph, void *data_end)
+//
+// Copies via bpf_xdp_load_bytes() (kernel >= 5.18) instead of a manually
+// unrolled per-byte loop: that loop's own instruction count scaled
+// directly with XDP_EVT_OTHER_RAW_MAX, which became a real verifier-
+// complexity risk once that constant grew toward MTU size (1480) to stop
+// truncating real payloads. bpf_xdp_load_bytes() does the equivalent
+// bounded copy as a single helper call regardless of length -- and,
+// unlike raw pointer dereference against ctx->data/data_end, also
+// correctly follows multi-buffer ("xdp_frags") packets whose data spans
+// more than one buffer, not just whatever's in the first one.
+static __always_inline int handle_other(struct xdp_md *ctx, struct iphdr *iph, void *data, void *data_end)
 {
     struct xdp_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (e) {
@@ -172,21 +182,21 @@ static __always_inline int handle_other(struct iphdr *iph, void *data_end)
         e->saddr = iph->saddr;
         e->daddr = iph->daddr;
 
-        /* Dump raw bytes starting at the IP header itself (covers the IP
-         * header's own fields -- TTL, flags, options, ... -- plus
-         * whatever L4 protocol follows, in one capture). Same bounded,
-         * unrolled-loop pattern dump_bytes() above already uses, so it
-         * stays verifier-friendly. */
-        __u8 *src = (__u8 *)iph;
-        __u16 n = 0;
-        #pragma unroll
-        for (int i = 0; i < XDP_EVT_OTHER_RAW_MAX; i++) {
-            if ((void *)(src + i + 1) > data_end)
-                break;
-            e->raw[i] = src[i];
-            n = i + 1;
-        }
-        e->raw_len = n;
+        /* offset is iph's distance from the frame's own start (normally
+         * 14, i.e. sizeof(struct ethhdr), but computed rather than
+         * assumed -- same reasoning as the pkt_addr/iph_addr capture
+         * that first confirmed it). avail clamps the request to however
+         * many bytes actually remain in THIS packet, capped at
+         * XDP_EVT_OTHER_RAW_MAX -- both bounds bpf_xdp_load_bytes()
+         * itself needs the length argument to respect. */
+        __u32 offset = (__u32)((__u8 *)iph - (__u8 *)data);
+        __u32 avail  = (__u32)((__u8 *)data_end - (__u8 *)iph);
+        __u32 want   = avail < XDP_EVT_OTHER_RAW_MAX ? avail : XDP_EVT_OTHER_RAW_MAX;
+
+        if (bpf_xdp_load_bytes(ctx, offset, e->raw, want) == 0)
+            e->raw_len = (__u16)want;
+        /* else: leave raw_len at 0 (already zeroed above) -- still worth
+         * submitting the event for its saddr/daddr alone. */
 
         bpf_ringbuf_submit(e, 0);
     }
@@ -217,5 +227,5 @@ int xdp_prog(struct xdp_md *ctx)
     // test and report its src/dest IP + raw bytes via handle_other() --
     // bypasses handle_tls()'s TLS-record matching entirely so every
     // non-SCTP packet prints, not just the ones that look like TLS.
-    return handle_other(iph, data_end);
+    return handle_other(ctx, iph, data, data_end);
 }

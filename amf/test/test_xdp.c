@@ -323,6 +323,144 @@ static void print_payload_dump(const __u8 *raw, __u16 hdrs_len, __u16 payload_le
     }
 }
 
+/* ── TCP stream reassembly (simple in-order append) ──────────────────
+ * A single packet's payload is often only a fragment of the actual
+ * message an application sent -- e.g. the two HTTP/2 frames analyzed by
+ * hand earlier could just as easily have arrived split across two
+ * packets. This buffers each TCP stream's payload bytes in the order
+ * they're delivered here, keyed by the exact 4-tuple -- each DIRECTION
+ * of a connection is its own stream (HTTP/2 is bidirectional/
+ * multiplexed; request bytes and response bytes flow, and get
+ * reassembled, independently).
+ *
+ * Deliberately NOT sequence-number-based: no gap detection, no
+ * out-of-order buffering, no retransmission handling. It just appends
+ * bytes in the order ring_buffer__poll() delivers events, which matches
+ * wire order closely enough for a same-host capture (loopback/veth
+ * delivery doesn't reorder in practice) -- this would need real
+ * seq-number bookkeeping to stay correct over an actual reordering-prone
+ * network path.
+ *
+ * STREAM_BUF_MAX bounds memory per stream, not message size: HTTP/2
+ * frames bigger than this (or many small ones piling up faster than
+ * they're drained) just get a "buffer full" notice and truncated,
+ * rather than growing unbounded. STREAM_CACHE_MAX bounds the number of
+ * concurrently-tracked streams the same way addr_cache does for
+ * addresses -- past that, the oldest slot is evicted for a new stream. */
+#define STREAM_CACHE_MAX 32
+#define STREAM_BUF_MAX   8192
+
+struct tcp_stream {
+    int   in_use;
+    __u32 saddr, daddr; /* network byte order, matches struct xdp_event */
+    __u16 sport, dport; /* host byte order, matches struct ip_tcp_info */
+    __u8  buf[STREAM_BUF_MAX];
+    __u16 buf_len;
+};
+static struct tcp_stream streams[STREAM_CACHE_MAX];
+
+static struct tcp_stream *find_or_create_stream(__u32 saddr, __u16 sport, __u32 daddr, __u16 dport)
+{
+    struct tcp_stream *free_slot = NULL;
+    for (int i = 0; i < STREAM_CACHE_MAX; i++) {
+        struct tcp_stream *s = &streams[i];
+        if (s->in_use && s->saddr == saddr && s->sport == sport &&
+            s->daddr == daddr && s->dport == dport)
+            return s;
+        if (!s->in_use && !free_slot)
+            free_slot = s;
+    }
+    if (!free_slot)
+        free_slot = &streams[0]; /* cache full -- evict the first slot rather than dropping this stream entirely */
+
+    memset(free_slot, 0, sizeof(*free_slot));
+    free_slot->in_use = 1;
+    free_slot->saddr  = saddr;
+    free_slot->sport  = sport;
+    free_slot->daddr  = daddr;
+    free_slot->dport  = dport;
+    return free_slot;
+}
+
+/* ── HTTP/2 frame decoder, drained from a reassembled stream buffer ───
+ * Decodes as many COMPLETE frames as are fully present at the front of
+ * the buffer (a frame's own 3-byte length field is exactly what makes
+ * "complete" checkable), prints each, then compacts the buffer -- drops
+ * the consumed bytes, keeps any trailing partial frame for next time.
+ * HEADERS/CONTINUATION payloads are HPACK-compressed (RFC 7541) and
+ * deliberately NOT decoded here -- a real HPACK decoder (dynamic table,
+ * Huffman coding) is a lot more than "lightweight"; this just labels
+ * them and moves on. DATA frames are printed as readable characters
+ * (SBI bodies are JSON, so this is usually actually readable). */
+
+static const char *h2_frame_type_name(__u8 type)
+{
+    switch (type) {
+    case 0: return "DATA";
+    case 1: return "HEADERS";
+    case 2: return "PRIORITY";
+    case 3: return "RST_STREAM";
+    case 4: return "SETTINGS";
+    case 5: return "PUSH_PROMISE";
+    case 6: return "PING";
+    case 7: return "GOAWAY";
+    case 8: return "WINDOW_UPDATE";
+    case 9: return "CONTINUATION";
+    default: return "?";
+    }
+}
+
+static void drain_h2_frames(struct tcp_stream *s, const char *src_name, const char *dst_name)
+{
+    __u16 off = 0;
+    while ((__u16)(s->buf_len - off) >= 9) {
+        const __u8 *h = s->buf + off;
+        __u32 len   = ((__u32)h[0] << 16) | ((__u32)h[1] << 8) | h[2];
+        __u8  type  = h[3];
+        __u8  flags = h[4];
+        __u32 stream_id = (((__u32)h[5] << 24) | ((__u32)h[6] << 16) |
+                           ((__u32)h[7] << 8) | h[8]) & 0x7FFFFFFFu;
+
+        if ((__u32)(s->buf_len - off) < 9 + len)
+            break; /* frame not fully buffered yet -- wait for the rest to arrive */
+
+        const __u8 *payload = h + 9;
+        printf("  [HTTP/2] %s -> %s  %s  len=%u flags=0x%02x stream=%u\n",
+               src_name, dst_name, h2_frame_type_name(type), len, flags, stream_id);
+
+        if (type == 0 /* DATA */ && len > 0) {
+            char text[256];
+            __u32 n = (len < sizeof(text) - 1) ? len : sizeof(text) - 1;
+            for (__u32 i = 0; i < n; i++)
+                text[i] = isprint(payload[i]) ? (char)payload[i] : '.';
+            text[n] = '\0';
+            printf("      data: \"%s\"%s\n", text, (len > n) ? " (truncated)" : "");
+        } else if (type == 1 || type == 9) { /* HEADERS / CONTINUATION */
+            printf("      (HPACK-compressed header block, %u byte(s) -- not decoded)\n", len);
+        } else if (type == 6 && len == 8) { /* PING */
+            printf("      opaque: %02x%02x%02x%02x%02x%02x%02x%02x%s\n",
+                   payload[0], payload[1], payload[2], payload[3],
+                   payload[4], payload[5], payload[6], payload[7],
+                   (flags & 0x1) ? " (ACK)" : "");
+        } else if (type == 8 && len == 4) { /* WINDOW_UPDATE */
+            __u32 incr = (((__u32)payload[0] << 24) | ((__u32)payload[1] << 16) |
+                          ((__u32)payload[2] << 8) | payload[3]) & 0x7FFFFFFFu;
+            printf("      window_size_increment: %u\n", incr);
+        } else if (type == 3 && len == 4) { /* RST_STREAM */
+            __u32 err = ((__u32)payload[0] << 24) | ((__u32)payload[1] << 16) |
+                        ((__u32)payload[2] << 8) | payload[3];
+            printf("      error_code: %u\n", err);
+        }
+
+        off = (__u16)(off + 9 + len);
+    }
+
+    if (off > 0) {
+        memmove(s->buf, s->buf + off, s->buf_len - off);
+        s->buf_len -= off;
+    }
+}
+
 /* ring_buffer__new()'s callback -- fires once per struct xdp_event
  * xdp_prog() submits, whether that's a real NGAP DATA chunk or a TLS
  * (HTTPS) record (see xdp_ngap_event.h's XDP_EVT_*).
@@ -389,6 +527,22 @@ static int handle_xdp_event(void *ctx, void *data, size_t data_sz)
             }
             printf("    %04u: %-48s %s\n", (unsigned)off, hex, ascii);
         }
+
+        /* Stream reassembly: append this packet's payload to its
+         * connection's buffer and print any HTTP/2 frame that's now
+         * fully present -- possibly one that started in an earlier
+         * packet, or one that only finishes in a later one (in which
+         * case nothing new prints here yet). */
+        struct tcp_stream *stream = find_or_create_stream(e->saddr, info.sport, e->daddr, info.dport);
+        __u16 avail = STREAM_BUF_MAX - stream->buf_len;
+        __u16 n = (info.payload_len < avail) ? info.payload_len : avail;
+        if (n < info.payload_len)
+            printf("    (stream buffer full -- dropping %u byte(s) for this connection)\n",
+                   info.payload_len - n);
+        memcpy(stream->buf + stream->buf_len, e->raw + info.hdrs_len, n);
+        stream->buf_len += n;
+        drain_h2_frames(stream, src_name, dst_name);
+
         break;
     }
     default:

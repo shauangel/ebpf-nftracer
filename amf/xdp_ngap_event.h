@@ -36,15 +36,17 @@
  * this and raw/raw_len below once the manual inspection this exists for
  * is done.
  *
- * 64 was enough to see IP+TCP headers but left ~0 bytes for payload once
- * TCP options (timestamps etc.) are counted -- e.g. a 20-byte IP header +
- * 32-byte TCP header already eats 52 of the 64. Bumped to 256 so a
- * PSH,ACK segment with real application data actually has room to show
- * up. Still a single bounded, unrolled copy loop in handle_other() (same
- * verifier-friendly pattern as before) -- if this ever fails to load
- * with a "program too large"/complexity error on your kernel, lower this
- * back down. */
-#define XDP_EVT_OTHER_RAW_MAX 256
+ * History: 64 was enough for IP+TCP headers but left ~0 bytes for
+ * payload once TCP options are counted; 256 gave payload some room but
+ * still truncated anything bigger than a small HTTP/2 frame or two.
+ * Bumped to 1480 -- enough for a full standard (non-jumbo) Ethernet
+ * frame's worth of IP+TCP+payload -- now that handle_other() reads via
+ * bpf_xdp_load_bytes() (kernel >= 5.18) instead of a manually unrolled
+ * per-byte copy loop: that loop's instruction count scaled linearly with
+ * this constant and was a real verifier-complexity risk at anything
+ * close to MTU size, where bpf_xdp_load_bytes() does the same bounded
+ * copy as a single (verifier-trusted) helper call regardless of length. */
+#define XDP_EVT_OTHER_RAW_MAX 1480
 
 /*
  * Field usage by type:
