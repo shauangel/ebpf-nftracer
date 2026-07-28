@@ -34,6 +34,7 @@
  * CAP_BPF the rest of this test suite already requires).
  */
 
+#include <ctype.h>
 #include <errno.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -125,9 +126,22 @@ static int handle_xdp_event(void *ctx, void *data, size_t data_sz)
             src, e->sport, dst, e->dport, e->tls_record);
         break;
     case XDP_EVT_OTHER:
-        /* DIAGNOSTIC event -- see handle_other() in ../xdp_ngap.c. Only
-         * src/dest IP are populated for this type, no ports. */
-        LOG("OTHER %s -> %s", src, dst);
+        /* DIAGNOSTIC/TEMPORARY event -- see handle_other() in
+         * ../xdp_ngap.c. Only fires with raw_len > 0 for the very first
+         * non-SCTP packet (one-shot latch on the BPF side); print a
+         * hex+ASCII dump of it for manual inspection. */
+        LOG("OTHER %s -> %s  (%u raw bytes captured, IP header onward)",
+            src, dst, e->raw_len);
+        for (__u16 off = 0; off < e->raw_len; off += 16) {
+            char hex[16 * 3 + 1] = {0};
+            char ascii[17] = {0};
+            int n = (e->raw_len - off < 16) ? (e->raw_len - off) : 16;
+            for (int i = 0; i < n; i++) {
+                snprintf(hex + i * 3, 4, "%02x ", e->raw[off + i]);
+                ascii[i] = isprint(e->raw[off + i]) ? (char)e->raw[off + i] : '.';
+            }
+            printf("    %04u: %-48s %s\n", (unsigned)off, hex, ascii);
+        }
         break;
     default:
         LOG("xdp_event: unknown type=%u from %s:%u -> %s:%u", e->type, src, e->sport, dst, e->dport);

@@ -35,6 +35,17 @@ struct {
     __uint(max_entries, 1 << 16);
 } events SEC(".maps");
 
+// TEMPORARY: one-entry latch so handle_other() below captures/dumps only
+// the very first non-SCTP packet it sees, instead of one per packet.
+// Remove this map along with the capture code in handle_other() once the
+// manual inspection it's for is done.
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u8);
+} other_captured SEC(".maps");
+
 // Printing detail
 static __always_inline void dump_bytes(void *base, void *data_end) {
     for (int i = 0; i < 32; i++) {
@@ -157,14 +168,19 @@ static __always_inline int handle_tls(struct iphdr *iph, void *data_end)
     return XDP_PASS;
 }
 
-// DIAGNOSTIC: catch-all for anything that isn't SCTP. No protocol-
-// specific parsing at all -- just report source/destination IP, to check
-// whether non-SCTP traffic is reaching xdp_prog in the first place
-// before trying to narrow it back down to TLS/HTTPS specifically (see
-// xdp_prog()'s dispatch below -- handle_tls() is bypassed for now).
+// DIAGNOSTIC / TEMPORARY: catch-all for anything that isn't SCTP. No
+// protocol-specific parsing -- just report source/destination IP, plus
+// (once only, via other_captured's latch) a raw byte dump of the very
+// first such packet, starting at the IP header itself, for manual
+// inspection. Remove the capture block below (and other_captured above)
+// once you've identified what's actually showing up here.
 static __always_inline int handle_other(struct iphdr *iph, void *data_end)
 {
-    (void)data_end; /* nothing past the IP header is touched for this test */
+    __u32 key = 0;
+    __u8 already = 0;
+    __u8 *captured = bpf_map_lookup_elem(&other_captured, &key);
+    if (captured)
+        already = *captured;
 
     struct xdp_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (e) {
@@ -172,6 +188,29 @@ static __always_inline int handle_other(struct iphdr *iph, void *data_end)
         e->type  = XDP_EVT_OTHER;
         e->saddr = iph->saddr;
         e->daddr = iph->daddr;
+
+        if (!already) {
+            /* First non-SCTP packet seen -- dump raw bytes starting at
+             * the IP header itself (covers the IP header's own fields
+             * -- TTL, flags, options, ... -- plus whatever L4 protocol
+             * follows, in one capture). Same bounded, unrolled-loop
+             * pattern dump_bytes() above already uses, so it stays
+             * verifier-friendly. */
+            __u8 *src = (__u8 *)iph;
+            __u16 n = 0;
+            #pragma unroll
+            for (int i = 0; i < XDP_EVT_OTHER_RAW_MAX; i++) {
+                if ((void *)(src + i + 1) > data_end)
+                    break;
+                e->raw[i] = src[i];
+                n = i + 1;
+            }
+            e->raw_len = n;
+
+            __u8 one = 1;
+            bpf_map_update_elem(&other_captured, &key, &one, BPF_ANY);
+        }
+
         bpf_ringbuf_submit(e, 0);
     }
 
