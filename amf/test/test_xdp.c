@@ -49,7 +49,7 @@
 #include <bpf/libbpf.h>      /* bpf_object__open_file/__load, bpf_program__fd, ring_buffer__* */
 #include <bpf/bpf.h>         /* bpf_xdp_attach/detach/query_id, bpf_obj_get_info_by_fd */
 
-#include "../xdp_ngap_event.h" /* struct ngap_event -- shared with ../xdp_ngap.c's "events" ringbuf */
+#include "../xdp_ngap_event.h" /* struct xdp_event -- shared with ../xdp_ngap.c's "events" ringbuf */
 
 /* Default attach target -- the host-side veth of the AMF container's N2
  * interface, same as ../amf_xdp.c's documented attach point. Overridable
@@ -95,27 +95,39 @@ static void print_ts(FILE *f)
         printf("\n"); \
     } while (0)
 
-/* ring_buffer__new()'s callback -- fires once per struct ngap_event
- * xdp_prog() submits, i.e. once per real NGAP DATA chunk it sees on the
- * wire. This is "the trace ... show[ing] in the loader": previously the
- * only way to see this was `sudo cat /sys/kernel/debug/tracing/
- * trace_pipe` catching xdp_ngap.c's old bpf_printk() calls; now it's
- * printed right here, in this process, as part of the same watchdog
- * output. Return value is libbpf's "keep polling" signal -- 0 always,
- * same as ../amf_loader.c's handle_event(). */
-static int handle_ngap_event(void *ctx, void *data, size_t data_sz)
+/* ring_buffer__new()'s callback -- fires once per struct xdp_event
+ * xdp_prog() submits, whether that's a real NGAP DATA chunk or an
+ * HTTP/1.x request/response line (see xdp_ngap_event.h's XDP_EVT_*).
+ * This is "the trace ... show[ing] in the loader": previously the only
+ * way to see the NGAP side of this was `sudo cat /sys/kernel/debug/
+ * tracing/trace_pipe` catching xdp_ngap.c's old bpf_printk() calls; now
+ * both kinds print right here, in this process, as part of the same
+ * watchdog output. Return value is libbpf's "keep polling" signal -- 0
+ * always, same as ../amf_loader.c's handle_event(). */
+static int handle_xdp_event(void *ctx, void *data, size_t data_sz)
 {
     (void)ctx;
-    if (data_sz < sizeof(struct ngap_event))
+    if (data_sz < sizeof(struct xdp_event))
         return 0; /* short record -- shouldn't happen for a fixed-size struct, ignore defensively */
 
-    const struct ngap_event *e = data;
+    const struct xdp_event *e = data;
     char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &e->saddr, src, sizeof(src));
     inet_ntop(AF_INET, &e->daddr, dst, sizeof(dst));
 
-    LOG("NGAP  %s:%u -> %s:%u  len=%u  procedureCode=%u  criticality=%u",
-        src, e->sport, dst, e->dport, e->chunk_len, e->procedure_code, e->criticality);
+    switch (e->type) {
+    case XDP_EVT_NGAP:
+        LOG("NGAP  %s:%u -> %s:%u  len=%u  procedureCode=%u  criticality=%u",
+            src, e->sport, dst, e->dport, e->chunk_len, e->procedure_code, e->criticality);
+        break;
+    case XDP_EVT_HTTP:
+        LOG("HTTP  %s:%u -> %s:%u  %s",
+            src, e->sport, dst, e->dport, e->method);
+        break;
+    default:
+        LOG("xdp_event: unknown type=%u from %s:%u -> %s:%u", e->type, src, e->sport, dst, e->dport);
+        break;
+    }
     return 0;
 }
 
@@ -231,7 +243,7 @@ int main(int argc, char **argv)
         bpf_object__close(obj);
         return 1;
     }
-    struct ring_buffer *rb = ring_buffer__new(bpf_map__fd(events_map), handle_ngap_event, NULL, NULL);
+    struct ring_buffer *rb = ring_buffer__new(bpf_map__fd(events_map), handle_xdp_event, NULL, NULL);
     if (!rb) {
         fprintf(stderr, "test_xdp: ring_buffer__new: %s\n", strerror(errno));
         bpf_object__close(obj);
@@ -270,11 +282,11 @@ int main(int argc, char **argv)
 
     while (!stop) {
         /* Doubles as the watchdog's tick AND the event drain: blocks up
-         * to POLL_INTERVAL_SEC, waking early to invoke
-         * handle_ngap_event() as soon as xdp_prog() submits one, so NGAP
-         * reports show up with real latency instead of only once per
-         * tick. A negative return other than -EINTR (this process's own
-         * SIGINT/SIGTERM handler interrupting the wait) is a real libbpf
+         * to POLL_INTERVAL_SEC, waking early to invoke handle_xdp_event()
+         * as soon as xdp_prog() submits one, so NGAP/HTTP reports show up
+         * with real latency instead of only once per tick. A negative
+         * return other than -EINTR (this process's own SIGINT/SIGTERM
+         * handler interrupting the wait) is a real libbpf
          * error -- worth an alert, but not worth aborting the watchdog
          * loop over. */
         int n = ring_buffer__poll(rb, POLL_INTERVAL_SEC * 1000);

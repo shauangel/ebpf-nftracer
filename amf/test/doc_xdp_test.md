@@ -10,8 +10,9 @@ actually attached there, until you hit Ctrl+C. See
 suite otherwise consists of; unlike those, this file never touches
 `sm_nodes`/`sm_edges` at all — `../xdp_ngap.c` (the "legacy, superseded"
 passive version — see `../README.md`) declares no FSM maps of its own,
-just one `SEC("xdp")` program that parses Ethernet/IP/SCTP/NGAP and
-reports each DATA chunk it sees, always returning `XDP_PASS`.
+just one `SEC("xdp")` program that parses Ethernet/IP and, per-packet,
+either SCTP/NGAP or TCP/HTTP, reporting whichever it recognizes and always
+returning `XDP_PASS`.
 
 **What it demonstrates:** that `xdp_prog` can be attached without any
 manual `ip link` invocation, and — the harder property to see any other
@@ -20,14 +21,16 @@ way — that if it ever stops being the program attached to the interface
 replaces it, or the interface itself is torn down/recreated), that fact
 gets **noticed and reported**, not silently missed.
 
-Each NGAP DATA chunk `xdp_prog` sees is also reported **directly in this
-process's own output**, not just via `bpf_printk()`/`trace_pipe`: `../
-xdp_ngap.c` submits a `struct ngap_event` (see `../xdp_ngap_event.h`)
-through its own `BPF_MAP_TYPE_RINGBUF` map (`events`), and `test_xdp.c`
-drains that ringbuf itself and prints each record as it arrives. That's
-the one BPF-side change this loader depends on: `xdp_ngap.c` used to be
-`bpf_printk()`-only, visible solely via `sudo cat
-/sys/kernel/debug/tracing/trace_pipe`; it isn't anymore.
+Each NGAP DATA chunk *and* each recognized HTTP/1.x request or response
+line `xdp_prog` sees is also reported **directly in this process's own
+output**, not just via `bpf_printk()`/`trace_pipe`: `../xdp_ngap.c`
+submits a `struct xdp_event` (see `../xdp_ngap_event.h`) through its own
+`BPF_MAP_TYPE_RINGBUF` map (`events`) for either kind, tagged by a `type`
+field, and `test_xdp.c` drains that ringbuf itself and prints each record
+as it arrives. That's the one BPF-side change this loader depends on:
+`xdp_ngap.c` used to be `bpf_printk()`-only (and SCTP/NGAP-only), visible
+solely via `sudo cat /sys/kernel/debug/tracing/trace_pipe`; it isn't
+anymore.
 
 ## Why a watchdog instead of an automated test
 
@@ -83,18 +86,23 @@ added to the parent `amf/` directory.
 Build it with plain `make` (which builds everything) or `make test_xdp`
 specifically; run it by hand.
 
-While it's running, any real SCTP association carrying an NGAP DATA chunk
-across the interface prints a line here directly, e.g.:
+While it's running, any real SCTP association carrying an NGAP DATA chunk,
+or any plain TCP connection carrying a recognizable HTTP/1.x request or
+response line, across the interface prints a line here directly, e.g.:
 
 ```
 [21:42:07] NGAP  10.0.0.1:38412 -> 10.0.0.2:38412  len=42  procedureCode=15  criticality=0
+[21:42:09] HTTP  10.0.0.3:52344 -> 10.0.0.4:80     GET
+[21:42:09] HTTP  10.0.0.4:80    -> 10.0.0.3:52344  HTTP
 ```
 
 (`procedureCode`/`criticality` are the raw NGAP PDU bytes `xdp_prog` reads
 off the wire, unchanged from what it used to `bpf_printk()` — see 3GPP TS
 38.413's NGAP-PDU-Descriptions ASN.1 module for what each `procedureCode`
-value maps to; this loader doesn't decode it any further than the byte
-offset `xdp_ngap.c` always has.)
+value maps to. `method` is one of `GET`/`POST`/`PUT`/`HEAD`/`DELETE`/
+`PATCH`/`OPTIONS` for a request, or literally `HTTP` for a response status
+line — this loader doesn't decode either protocol any further than
+`xdp_ngap.c` already does.)
 
 While it's running, in another shell on the same box, try breaking it on
 purpose and watch it notice:
@@ -119,31 +127,36 @@ match `xdp_ngap.c`'s `SEC("xdp") int xdp_prog(...)` by name exactly, since
 it's looked up post-load via `bpf_object__find_program_by_name()`),
 `"events"` (must match `xdp_ngap.c`'s `BPF_MAP_TYPE_RINGBUF` map name,
 looked up via `bpf_object__find_map_by_name()`), and `2` seconds as the
-upper bound between watchdog checks (see `handle_ngap_event()` below for
+upper bound between watchdog checks (see `handle_xdp_event()` below for
 why it's an upper bound, not a fixed interval).
 
-### `struct ngap_event` / `../xdp_ngap_event.h`
+### `struct xdp_event` / `../xdp_ngap_event.h`
 
 The record type both sides of the ringbuf agree on — `#include`'d by both
 `../xdp_ngap.c` (BPF side, fills and submits it) and this file (userspace
 side, reads it back), the same sharing pattern `../sm_map.h` uses for
-`sm_nodes`/`sm_edges`. Fields are the exact values `xdp_ngap.c` already had
-in hand when it used to `bpf_printk()` them: source/dest IPv4 (network byte
-order — `inet_ntop()` doesn't care), source/dest SCTP port, the DATA
-chunk's length, and the NGAP `procedureCode`/`criticality` read off the
-first three bytes of the NGAP PDU.
+`sm_nodes`/`sm_edges`. One struct covers both event kinds, discriminated by
+a `type` field (`XDP_EVT_NGAP` / `XDP_EVT_HTTP`) — same "tag + per-type
+field usage documented in a comment, unused fields zeroed" convention
+`../events.h`'s `struct event` already uses for the uprobe/tracepoint
+tracer's several `EVT_*` kinds. NGAP fields (`chunk_len`,
+`procedure_code`, `criticality`) and the HTTP field (`method`) are the
+exact values `xdp_ngap.c` already had in hand — nothing decoded further
+than it always was.
 
-### `handle_ngap_event()`
+### `handle_xdp_event()`
 
 `ring_buffer__new()`'s callback — libbpf invokes this once per
-`struct ngap_event` `xdp_prog()` submits. Converts the two raw `__u32`
-addresses back to dotted-quad with `inet_ntop()` and prints one `LOG()`
-line per record. This is the whole reason the ringbuf exists: previously
-the only way to see this data was `sudo cat
+`struct xdp_event` `xdp_prog()` submits, whichever `handle_sctp()`/
+`handle_tcp()` (see `../xdp_ngap.c`) produced it. Converts the two raw
+`__u32` addresses back to dotted-quad with `inet_ntop()`, then switches on
+`e->type` to print an `NGAP` or `HTTP` line with the fields that type
+actually uses. This is the whole reason the ringbuf exists: previously the
+only way to see the NGAP side of this was `sudo cat
 /sys/kernel/debug/tracing/trace_pipe` catching `xdp_ngap.c`'s old
 `bpf_printk()` calls (a separate, kernel-wide trace stream shared with
-every other `bpf_printk()` on the system); now it's this loader's own,
-attributable output.
+every other `bpf_printk()` on the system, and one that never covered HTTP
+at all); now both kinds are this loader's own, attributable output.
 
 ### `stop` / `handle_signal()`
 
@@ -198,7 +211,7 @@ mode won in `*flags_used`, since detaching later needs matching flags.
    `bpf_object__load()`, then `bpf_object__find_program_by_name()` for
    `"xdp_prog"` and `bpf_program__fd()` for its fd.
 4. **Start draining `events`.** `bpf_object__find_map_by_name()` +
-   `bpf_map__fd()` + `ring_buffer__new(fd, handle_ngap_event, NULL, NULL)`
+   `bpf_map__fd()` + `ring_buffer__new(fd, handle_xdp_event, NULL, NULL)`
    — done *before* attaching, so no event submitted the instant
    `attach_xdp()` succeeds can be missed.
 5. **Attach** via `attach_xdp()`.
@@ -209,13 +222,13 @@ mode won in `*flags_used`, since detaching later needs matching flags.
 7. **Watchdog loop** (requirement 2, "alert ... in any case") — every
    tick:
    - `ring_buffer__poll(rb, POLL_INTERVAL_SEC * 1000)` both drains
-     `events` (firing `handle_ngap_event()` for anything queued) *and*
-     provides the tick's timing — it blocks up to `POLL_INTERVAL_SEC`
-     seconds but wakes early the moment an event arrives, so NGAP records
-     print with real latency instead of batching up to once per tick. A
-     negative return other than `-EINTR` (this process's own signal
-     handler interrupting the wait) is a real libbpf error — alerted on,
-     but not fatal to the watchdog loop.
+     `events` (firing `handle_xdp_event()` for anything queued, NGAP or
+     HTTP) *and* provides the tick's timing — it blocks up to
+     `POLL_INTERVAL_SEC` seconds but wakes early the moment an event
+     arrives, so records print with real latency instead of batching up
+     to once per tick. A negative return other than `-EINTR` (this
+     process's own signal handler interrupting the wait) is a real libbpf
+     error — alerted on, but not fatal to the watchdog loop.
    - `if_nametoindex(ifname) == 0` → the interface itself is gone. Alert
      once (state-gated, see below), then block in `wait_for_ifindex()`
      until it reappears, then re-attach with the *same* `prog_fd` (the
@@ -249,14 +262,26 @@ mode won in `*flags_used`, since detaching later needs matching flags.
 - **No assertions, no pass/fail exit code.** Like the original design this
   file replaced, this is an operational tool, not a `make test` check —
   see `WATCH_BINS` in the Makefile.
-- **Doesn't decode NGAP any further than `xdp_ngap.c` already did.**
-  `handle_ngap_event()` prints the raw `procedureCode`/`criticality` bytes
-  `xdp_prog()` read off the wire, same as its old `bpf_printk()` call did
-  — no ASN.1 PER decode, no procedure-code-to-name lookup. `xdp_prog()`
-  itself no longer calls `bpf_printk()` (see `../xdp_ngap_event.h`'s file
-  header) — the unrelated, already-unused `dump_bytes()` helper still has
-  one in its body, but nothing calls that function, so there's nothing
-  left on `trace_pipe` for this program in practice.
+- **Doesn't decode NGAP or HTTP any further than `xdp_ngap.c` already
+  does.** `handle_xdp_event()` prints the raw `procedureCode`/
+  `criticality` bytes or the raw 3-4 byte method-prefix match `xdp_prog()`
+  produced, same shallow depth its old `bpf_printk()` call had for NGAP —
+  no ASN.1 PER decode, no procedure-code-to-name lookup, no HTTP header/
+  URL/body parsing beyond "does the first 4 bytes of this TCP payload look
+  like a request or status line." `xdp_prog()` itself no longer calls
+  `bpf_printk()` (see `../xdp_ngap_event.h`'s file header) — the
+  unrelated, already-unused `dump_bytes()` helper still has one in its
+  body, but nothing calls that function, so there's nothing left on
+  `trace_pipe` for this program in practice.
+- **HTTP detection is content-based, not port-based.** `handle_tcp()` (in
+  `../xdp_ngap.c`) never checks `tcp->source`/`tcp->dest` against port 80
+  or any other specific port — it only looks at whether the TCP payload's
+  first few bytes match a known HTTP/1.x method or the `"HTTP/"` response
+  prefix, the same "identify by wire content, not by port" approach
+  `handle_sctp()` already used for NGAP (via the SCTP DATA chunk's PPID).
+  This means it'll also flag HTTP running on a non-standard port, and
+  correspondingly won't flag non-HTTP traffic that merely happens to use
+  port 80.
 - **Doesn't reclaim an interface a different program took over.** See
   `STATE_REPLACED` above — alerts, but leaves the other program in place
   rather than fighting over it every poll.
