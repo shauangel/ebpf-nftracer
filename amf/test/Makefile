@@ -74,10 +74,10 @@ sm_use_case: sm_use_case.c framework.h test_util.h fixtures.h ../sm_map.h
 # not linked in, so it's a separate build step, same clang -target bpf
 # invocation ../README.md documents for hand-compiling xdp_ngap.c, just
 # with its output kept in amf/test/ instead of amf/.
-xdp_ngap.bpf.o: ../xdp_ngap.c ../../vmlinux.h
+xdp_ngap.bpf.o: ../xdp_ngap.c ../xdp_ngap_event.h ../../vmlinux.h
 	$(CLANG) $(BPF_CFLAGS) -c ../xdp_ngap.c -o $@
 
-test_xdp: test_xdp.c xdp_ngap.bpf.o
+test_xdp: test_xdp.c ../xdp_ngap_event.h xdp_ngap.bpf.o
 	$(CC) $(CFLAGS) test_xdp.c -o $@ $(LIBS)
 
 clean:

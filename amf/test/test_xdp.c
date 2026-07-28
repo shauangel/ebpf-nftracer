@@ -42,11 +42,14 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <arpa/inet.h>        /* inet_ntop(), INET_ADDRSTRLEN */
 #include <net/if.h>          /* if_nametoindex() */
 #include <linux/if_link.h>   /* XDP_FLAGS_* attach-mode flags */
 
-#include <bpf/libbpf.h>      /* bpf_object__open_file/__load, bpf_program__fd */
+#include <bpf/libbpf.h>      /* bpf_object__open_file/__load, bpf_program__fd, ring_buffer__* */
 #include <bpf/bpf.h>         /* bpf_xdp_attach/detach/query_id, bpf_obj_get_info_by_fd */
+
+#include "../xdp_ngap_event.h" /* struct ngap_event -- shared with ../xdp_ngap.c's "events" ringbuf */
 
 /* Default attach target -- the host-side veth of the AMF container's N2
  * interface, same as ../amf_xdp.c's documented attach point. Overridable
@@ -56,8 +59,9 @@
 
 /* Built by this directory's Makefile (see the xdp_ngap.bpf.o rule) from
  * ../xdp_ngap.c -- kept in amf/test/, nothing added to amf/ itself. */
-#define XDP_OBJ_PATH  "xdp_ngap.bpf.o"
-#define XDP_PROG_NAME "xdp_prog" /* matches SEC("xdp") int xdp_prog(...) in xdp_ngap.c */
+#define XDP_OBJ_PATH   "xdp_ngap.bpf.o"
+#define XDP_PROG_NAME  "xdp_prog" /* matches SEC("xdp") int xdp_prog(...) in xdp_ngap.c */
+#define XDP_EVENTS_MAP "events"   /* matches the BPF_MAP_TYPE_RINGBUF SEC(".maps") in xdp_ngap.c */
 
 #define POLL_INTERVAL_SEC 2
 
@@ -90,6 +94,30 @@ static void print_ts(FILE *f)
         printf(__VA_ARGS__); \
         printf("\n"); \
     } while (0)
+
+/* ring_buffer__new()'s callback -- fires once per struct ngap_event
+ * xdp_prog() submits, i.e. once per real NGAP DATA chunk it sees on the
+ * wire. This is "the trace ... show[ing] in the loader": previously the
+ * only way to see this was `sudo cat /sys/kernel/debug/tracing/
+ * trace_pipe` catching xdp_ngap.c's old bpf_printk() calls; now it's
+ * printed right here, in this process, as part of the same watchdog
+ * output. Return value is libbpf's "keep polling" signal -- 0 always,
+ * same as ../amf_loader.c's handle_event(). */
+static int handle_ngap_event(void *ctx, void *data, size_t data_sz)
+{
+    (void)ctx;
+    if (data_sz < sizeof(struct ngap_event))
+        return 0; /* short record -- shouldn't happen for a fixed-size struct, ignore defensively */
+
+    const struct ngap_event *e = data;
+    char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &e->saddr, src, sizeof(src));
+    inet_ntop(AF_INET, &e->daddr, dst, sizeof(dst));
+
+    LOG("NGAP  %s:%u -> %s:%u  len=%u  procedureCode=%u  criticality=%u",
+        src, e->sport, dst, e->dport, e->chunk_len, e->procedure_code, e->criticality);
+    return 0;
+}
 
 /* Blocks (polling once a second) until `ifname` exists, returning its
  * ifindex -- or -1 if a signal set `stop` while waiting. This is what
@@ -193,9 +221,27 @@ int main(int argc, char **argv)
     }
     int prog_fd = bpf_program__fd(prog);
 
+    /* Find the "events" ringbuf and start draining it -- this is what
+     * makes xdp_prog's NGAP reports show up here instead of only via
+     * trace_pipe. Done before attaching so no event submitted the moment
+     * attach_xdp() succeeds can be missed. */
+    struct bpf_map *events_map = bpf_object__find_map_by_name(obj, XDP_EVENTS_MAP);
+    if (!events_map) {
+        fprintf(stderr, "test_xdp: map \"%s\" not found in %s\n", XDP_EVENTS_MAP, XDP_OBJ_PATH);
+        bpf_object__close(obj);
+        return 1;
+    }
+    struct ring_buffer *rb = ring_buffer__new(bpf_map__fd(events_map), handle_ngap_event, NULL, NULL);
+    if (!rb) {
+        fprintf(stderr, "test_xdp: ring_buffer__new: %s\n", strerror(errno));
+        bpf_object__close(obj);
+        return 1;
+    }
+
     __u32 xdp_flags = 0;
     if (attach_xdp(ifindex, prog_fd, &xdp_flags) != 0) {
         fprintf(stderr, "test_xdp: attach_xdp: %s\n", strerror(errno));
+        ring_buffer__free(rb);
         bpf_object__close(obj);
         return 1;
     }
@@ -207,6 +253,7 @@ int main(int argc, char **argv)
     if (bpf_obj_get_info_by_fd(prog_fd, &info, &info_len)) {
         fprintf(stderr, "test_xdp: bpf_obj_get_info_by_fd: %s\n", strerror(errno));
         bpf_xdp_detach(ifindex, xdp_flags, NULL);
+        ring_buffer__free(rb);
         bpf_object__close(obj);
         return 1;
     }
@@ -222,9 +269,19 @@ int main(int argc, char **argv)
     enum { STATE_ATTACHED, STATE_DETACHED, STATE_REPLACED, STATE_IFACE_GONE } state = STATE_ATTACHED;
 
     while (!stop) {
-        sleep(POLL_INTERVAL_SEC);
+        /* Doubles as the watchdog's tick AND the event drain: blocks up
+         * to POLL_INTERVAL_SEC, waking early to invoke
+         * handle_ngap_event() as soon as xdp_prog() submits one, so NGAP
+         * reports show up with real latency instead of only once per
+         * tick. A negative return other than -EINTR (this process's own
+         * SIGINT/SIGTERM handler interrupting the wait) is a real libbpf
+         * error -- worth an alert, but not worth aborting the watchdog
+         * loop over. */
+        int n = ring_buffer__poll(rb, POLL_INTERVAL_SEC * 1000);
         if (stop)
             break;
+        if (n < 0 && n != -EINTR)
+            ALERT("ring_buffer__poll on \"%s\" events: %d", XDP_EVENTS_MAP, n);
 
         unsigned cur_ifindex = if_nametoindex(ifname);
         if (cur_ifindex == 0) {
@@ -312,6 +369,7 @@ int main(int argc, char **argv)
         if (bpf_xdp_detach(ifindex, xdp_flags, NULL) != 0)
             fprintf(stderr, "test_xdp: bpf_xdp_detach: %s (may already be detached)\n", strerror(errno));
     }
+    ring_buffer__free(rb);
     bpf_object__close(obj);
     return 0;
 }

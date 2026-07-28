@@ -2,6 +2,8 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
+#include "xdp_ngap_event.h"
+
 #define ETH_P_IP 0x0800
 #define IPPROTO_SCTP 132
 #define SCTP_PPID_NGAP 60
@@ -25,6 +27,17 @@ struct sctp_data_chunk {
 };
 
 char LICENSE[] SEC("license") = "GPL";
+
+/* Reported NGAP DATA chunks used to only go to bpf_printk() (visible via
+ * `sudo cat /sys/kernel/debug/tracing/trace_pipe`); now they're submitted
+ * here instead, for test/test_xdp.c to poll and print directly -- same
+ * ringbuf + userspace ring_buffer__poll() pattern amf_tracer.bpf.c /
+ * amf_loader.c already use, just this program's own private ringbuf and
+ * record type (see xdp_ngap_event.h). */
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 1 << 16);   /* 64 KB -- NGAP InitialUEMessage rate is low, no need for amf_tracer.bpf.c's 16 MB */
+} events SEC(".maps");
 
 static __always_inline void dump_bytes(void *base, void *data_end) {
     for (int i = 0; i < 32; i++) {
@@ -92,12 +105,22 @@ int xdp_prog(struct xdp_md *ctx)
     __u16 procedure_code = ((__u16)b0 << 8) | b1;
     __u8 criticality = b2;
 
-
-    bpf_printk("SCTP sport=%d dport=%d len=%d NGAP-procedureCode=%d",
-            bpf_ntohs(sctp->source),
-            bpf_ntohs(sctp->dest),
-            chunk_len,
-            procedure_code);
+    /* Report this NGAP DATA chunk to the loader instead of bpf_printk()
+     * -- reserve a slot, fill it, submit. A NULL reserve (ringbuf full)
+     * just means this one event is dropped; never worth failing the
+     * packet over, so fall through to XDP_PASS either way. */
+    struct ngap_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+    if (e) {
+        e->saddr          = iph->saddr;
+        e->daddr          = iph->daddr;
+        e->sport          = bpf_ntohs(sctp->source);
+        e->dport          = bpf_ntohs(sctp->dest);
+        e->chunk_len      = chunk_len;
+        e->procedure_code = procedure_code;
+        e->criticality    = criticality;
+        __builtin_memset(e->_pad, 0, sizeof(e->_pad));
+        bpf_ringbuf_submit(e, 0);
+    }
 
     return XDP_PASS;
 }

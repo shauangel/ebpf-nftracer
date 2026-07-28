@@ -1,185 +1,266 @@
-# amf/test/test_xdp.c — live monitor for `../amf_xdp.c`
+# amf/test/test_xdp.c — auto-attach loader + detach watchdog for `../xdp_ngap.c`
 
-`test_xdp.c` is a small **live monitor**, not an automated pass/fail test:
-it loads the real, compiled `amf_xdp.o`, attaches `amf_xdp_enforce()` as an
-actual XDP program on a real interface, and once a second prints
-`amf_xdp_stats` (`PASS`/`DROP`/`STATE_INVALID`) and every entry in
-`ue_state_map`, until you hit Ctrl+C. See [`map_test.md`](map_test.md) for
-the `sm_nodes`/`sm_edges` map tests this builds on.
+`test_xdp.c` is a small, long-running **loader + watchdog**, not an
+automated pass/fail test: it loads the real, compiled `xdp_ngap.bpf.o`,
+attaches its single program (`xdp_prog`) to a real interface — waiting for
+that interface to exist rather than requiring it up front — and then polls
+once every `POLL_INTERVAL_SEC` seconds for as long as it's the program
+actually attached there, until you hit Ctrl+C. See
+[`map_test.md`](map_test.md) for the `sm_nodes`/`sm_edges` map tests this
+suite otherwise consists of; unlike those, this file never touches
+`sm_nodes`/`sm_edges` at all — `../xdp_ngap.c` (the "legacy, superseded"
+passive version — see `../README.md`) declares no FSM maps of its own,
+just one `SEC("xdp")` program that parses Ethernet/IP/SCTP/NGAP and
+reports each DATA chunk it sees, always returning `XDP_PASS`.
 
-**What it demonstrates:** `amf_xdp_enforce()` must tell an SCTP/NGAP packet
-(the only traffic it's meant to inspect — see `../amf_xdp.c`'s file header)
-apart from ordinary HTTP traffic, which must sail through completely
-untouched ("fail-open by design"). This monitor shows that live: attach it
-to an interface, send it real HTTP traffic and watch nothing move, then
-send it a real SCTP/NGAP `InitialUEMessage` and watch `amf_xdp_stats` and
-`ue_state_map` react.
+**What it demonstrates:** that `xdp_prog` can be attached without any
+manual `ip link` invocation, and — the harder property to see any other
+way — that if it ever stops being the program attached to the interface
+(someone runs `ip link set dev <iface> xdp off`, a different program
+replaces it, or the interface itself is torn down/recreated), that fact
+gets **noticed and reported**, not silently missed.
 
-## Why a monitor instead of an automated test
+Each NGAP DATA chunk `xdp_prog` sees is also reported **directly in this
+process's own output**, not just via `bpf_printk()`/`trace_pipe`: `../
+xdp_ngap.c` submits a `struct ngap_event` (see `../xdp_ngap_event.h`)
+through its own `BPF_MAP_TYPE_RINGBUF` map (`events`), and `test_xdp.c`
+drains that ringbuf itself and prints each record as it arrives. That's
+the one BPF-side change this loader depends on: `xdp_ngap.c` used to be
+`bpf_printk()`-only, visible solely via `sudo cat
+/sys/kernel/debug/tracing/trace_pipe`; it isn't anymore.
 
-An earlier version of this file fed `amf_xdp_enforce()` synthetic packets
-through the kernel's `BPF_PROG_TEST_RUN` facility and asserted on the
-result — useful for point-checking the parser in isolation, deterministic,
-CI-friendly. But it can't show the thing that actually matters day to day:
-does the program correctly categorize traffic *as it actually arrives on
-the wire*, on a *real* interface, possibly interleaved with everything else
-a real veth carries. This version trades determinism for that — it's a
-tool you run while generating real traffic and watch, not something with a
-pass/fail exit code.
+## Why a watchdog instead of an automated test
+
+`xdp_prog` has no maps and no meaningful return value to assert on (it
+always returns `XDP_PASS` — see `../xdp_ngap.c`), so there's nothing for a
+`BPF_PROG_TEST_RUN`-style assertion to check beyond "did it load," which
+`bpf_object__load()` failing outright already covers. What actually matters
+for a program meant to run unattended is whether it *stays* attached — and
+that's a property polling has to watch for over time, not something a
+single load-and-exit test can assert once and be done with.
 
 ## Requirements
 
 Everything [`map_test.md`](map_test.md#requirements) requires, plus:
 
-- **clang**, to build `amf_xdp.o` (see the Makefile's `amf_xdp.o` rule —
-  the same `clang -target bpf ...` command `../README.md`'s "Building &
-  Running" section documents for hand-compiling `amf_xdp.c`).
-- **libbpf with `bpf_xdp_attach()`/`bpf_xdp_detach()`** (libbpf >= 0.6 —
-  these replaced the older, deprecated `bpf_set_link_xdp_fd()`).
-- **The target interface must already exist.** `test_xdp` attaches to it;
-  it doesn't create it. Default is `veth5538fab` (`../amf_xdp.c`'s own
-  documented attach target — see its file header and `../README.md`'s
-  "Building & Running"), overridable as `argv[1]`.
-- Root, same as everything else in this directory (attaching an XDP
-  program and reading BPF maps both need real BPF/net privileges).
+- **clang**, to build `xdp_ngap.bpf.o` (see the Makefile's `xdp_ngap.bpf.o`
+  rule — the same `clang -target bpf ...` command `../README.md`'s
+  "Building & Running" section documents for hand-compiling `xdp_ngap.c`'s
+  sibling `amf_xdp.c`).
+- **libbpf with `bpf_xdp_attach()`/`bpf_xdp_detach()`/`bpf_xdp_query_id()`**
+  (libbpf >= 0.6 — these replaced the older, deprecated
+  `bpf_set_link_xdp_fd()`) **and `ring_buffer__new()`/`__poll()`/`__free()`**
+  (the same ringbuf API `../amf_loader.c` already uses for its own
+  `events` map).
+- Root, same as everything else in this directory — attaching an XDP
+  program additionally needs `CAP_NET_ADMIN` on top of the `CAP_BPF` the
+  rest of this suite requires.
+
+**Not** required, unlike the map tests: bpffs mounted at `/sys/fs/bpf` —
+`test_xdp` never pins anything.
+
+The target interface does **not** need to already exist when you start
+`test_xdp` — see "attach automatically" below. Default is `veth5538fab`
+(`../amf_xdp.c`'s own documented attach target, reused here since
+`xdp_ngap.c` attaches to the same N2 veth — see `../README.md`'s "Building
+& Running"), overridable as `argv[1]`.
 
 ## Usage
 
 ```sh
 cd amf/test
-make test_xdp                 # also builds amf_xdp.o (see Makefile)
+make test_xdp                 # also builds xdp_ngap.bpf.o (see Makefile)
 sudo ./test_xdp                # attaches to veth5538fab
 # or:
 sudo ./test_xdp my-other-veth  # attaches to a different interface
 ```
 
-`amf_xdp.o` is built **into `amf/test/`**, not `../` — nothing is added to
-the parent `amf/` directory.
+`xdp_ngap.bpf.o` is built **into `amf/test/`**, not `../` — nothing is
+added to the parent `amf/` directory.
 
 `test_xdp` is deliberately **not** part of `make test`'s automated run loop
-(it never exits on its own) — see `MONITOR_BINS` vs. `TEST_BINS` in the
-Makefile. Build it with plain `make` (which builds everything) or
-`make test_xdp` specifically; run it by hand.
+(it never exits on its own) — see `WATCH_BINS` vs. `BINS` in the Makefile.
+Build it with plain `make` (which builds everything) or `make test_xdp`
+specifically; run it by hand.
 
-While it's running, in another shell on the same box:
+While it's running, any real SCTP association carrying an NGAP DATA chunk
+across the interface prints a line here directly, e.g.:
 
-```sh
-# should NOT move amf_xdp_stats or create a ue_state_map entry
-curl --interface veth5538fab http://some-http-server/
-
-# should move amf_xdp_stats and populate ue_state_map -- needs a real (or
-# simulated) SCTP association carrying an NGAP InitialUEMessage across
-# the same interface, e.g. from a real gNB/UE simulator pointed at it
+```
+[21:42:07] NGAP  10.0.0.1:38412 -> 10.0.0.2:38412  len=42  procedureCode=15  criticality=0
 ```
 
-Ctrl+C detaches the program from the interface and exits cleanly.
+(`procedureCode`/`criticality` are the raw NGAP PDU bytes `xdp_prog` reads
+off the wire, unchanged from what it used to `bpf_printk()` — see 3GPP TS
+38.413's NGAP-PDU-Descriptions ASN.1 module for what each `procedureCode`
+value maps to; this loader doesn't decode it any further than the byte
+offset `xdp_ngap.c` always has.)
+
+While it's running, in another shell on the same box, try breaking it on
+purpose and watch it notice:
+
+```sh
+sudo ip link set dev veth5538fab xdp off      # -> "xdp_prog was DETACHED" alert, then re-attaches itself
+sudo ip link set dev veth5538fab xdp obj amf_xdp.o sec xdp   # -> "xdp_prog ... was REPLACED" alert (won't fight over it)
+sudo ip link del veth5538fab                   # -> "interface ... disappeared" alert, then waits for it to come back
+```
+
+Ctrl+C detaches the program (if it's still the one attached) and exits
+cleanly.
 
 ## Code walkthrough
 
-### Mirrored constants/structs
+### `DEFAULT_IFACE` / `XDP_OBJ_PATH` / `XDP_PROG_NAME` / `XDP_EVENTS_MAP` / `POLL_INTERVAL_SEC`
 
-`../amf_xdp.c` defines its stats-array indices and its per-UE value struct
-privately — neither is exposed through `../sm_map.h` (the only header both
-files share). Since `amf_xdp.c` is only ever *loaded as a compiled `.o`*
-here, never `#include`d as source, `test_xdp.c` keeps byte-identical
-copies:
+The knobs the rest of the file is built around: `"veth5538fab"`,
+`"xdp_ngap.bpf.o"` (this directory's build output, not `../xdp_ngap.c`
+directly — a BPF object has to be compiled first), `"xdp_prog"` (must
+match `xdp_ngap.c`'s `SEC("xdp") int xdp_prog(...)` by name exactly, since
+it's looked up post-load via `bpf_object__find_program_by_name()`),
+`"events"` (must match `xdp_ngap.c`'s `BPF_MAP_TYPE_RINGBUF` map name,
+looked up via `bpf_object__find_map_by_name()`), and `2` seconds as the
+upper bound between watchdog checks (see `handle_ngap_event()` below for
+why it's an upper bound, not a fixed interval).
 
-```c
-enum { STAT_PASS = 0, STAT_DROP = 1, STAT_STATE_INVALID = 2, STAT_MAX };
+### `struct ngap_event` / `../xdp_ngap_event.h`
 
-struct ue_val {
-    char     state[SM_NAME_MAX];   /* SM_NAME_MAX comes from sm_map.h -- real, shared */
-    uint64_t last_seen_ns;
-};
-```
+The record type both sides of the ringbuf agree on — `#include`'d by both
+`../xdp_ngap.c` (BPF side, fills and submits it) and this file (userspace
+side, reads it back), the same sharing pattern `../sm_map.h` uses for
+`sm_nodes`/`sm_edges`. Fields are the exact values `xdp_ngap.c` already had
+in hand when it used to `bpf_printk()` them: source/dest IPv4 (network byte
+order — `inet_ntop()` doesn't care), source/dest SCTP port, the DATA
+chunk's length, and the NGAP `procedureCode`/`criticality` read off the
+first three bytes of the NGAP PDU.
 
-Same convention `fixtures.h` uses for mirroring `../amf_comm.c`'s FSM
-table — keep these in sync with `../amf_xdp.c` by inspection if it ever
-changes.
+### `handle_ngap_event()`
 
-### `now_ns()` / `print_ts()`
+`ring_buffer__new()`'s callback — libbpf invokes this once per
+`struct ngap_event` `xdp_prog()` submits. Converts the two raw `__u32`
+addresses back to dotted-quad with `inet_ntop()` and prints one `LOG()`
+line per record. This is the whole reason the ringbuf exists: previously
+the only way to see this data was `sudo cat
+/sys/kernel/debug/tracing/trace_pipe` catching `xdp_ngap.c`'s old
+`bpf_printk()` calls (a separate, kernel-wide trace stream shared with
+every other `bpf_printk()` on the system); now it's this loader's own,
+attributable output.
 
-`../amf_xdp.c` stamps `ue_val.last_seen_ns` with `bpf_ktime_get_ns()` —
-nanoseconds since boot, i.e. `CLOCK_MONOTONIC`. `now_ns()` reads the same
-clock from userspace (`clock_gettime(CLOCK_MONOTONIC, ...)`) so
-`dump_ue_state_map()`'s "last update N.Ns ago" is a real, comparable age,
-not just a raw uninterpretable integer. `print_ts()` is unrelated —
-just a wall-clock `HH:MM:SS` prefix for each printed line, same idea as
-`../amf_loader.c`'s own `fmt_ts()` helper.
+### `stop` / `handle_signal()`
 
-### `dump_ue_state_map()`
+Same `volatile sig_atomic_t` + handler pattern `../amf_loader.c` uses for
+`SIGINT`/`SIGTERM` — a signal only sets a flag; all the real cleanup
+(detach, `bpf_object__close()`) happens back in `main()` once the flag is
+observed, never inside the handler itself.
 
-Walks every entry in `ue_state_map` using the real kernel hash-map
-iteration protocol — `bpf_map_get_next_key()` + `bpf_map_lookup_elem()`
-per key, the same pattern `map_test.md`'s `test_map_walk.c` uses for
-`sm_nodes`/`sm_edges` — and prints each as `<source IP>  state=<FSM state>
-last update <age>`. This is the live, observable version of "distinguish
-SCTP and HTTP": only sources `amf_xdp_enforce()` actually categorized as
-NGAP ever get an entry here at all. An HTTP client hammering the same
-interface will never appear in this dump, no matter how much traffic it
-sends — the program returns (via the `iph->protocol != IPPROTO_SCTP`
-check) long before it would compute a per-source key for it.
+### `print_ts()` / `LOG()` / `ALERT()`
+
+`print_ts()` is a wall-clock `HH:MM:SS` prefix (`localtime_r()`), unrelated
+to `../amf_loader.c`'s `fmt_ts()` (which formats a boot-relative
+`bpf_ktime_get_ns()` value out of a ring-buffer event — there is no such
+event here, just this process's own clock). `LOG()`/`ALERT()` both prefix
+a line with the timestamp and a trailing newline; `ALERT()` additionally
+writes to `stderr` with a `*** ALERT:` marker, so a `2>` redirect or a log
+scraper can separate "things changed, and it's bad" from routine status
+lines without parsing message text.
+
+### `wait_for_ifindex()`
+
+Polls `if_nametoindex()` once a second until it succeeds (or `stop` is
+set), printing a single `"waiting for interface ... to appear"` line the
+first time it has to wait rather than one per second. This is what makes
+attaching **automatic**: `main()` doesn't require `veth5538fab` to already
+exist at startup — e.g. the AMF container that creates it hasn't launched
+yet — it just waits. Reused later by the watchdog loop to wait for the
+interface to come back if it disappears entirely.
+
+### `attach_xdp()`
+
+Tries `bpf_xdp_attach()` in **native/driver** mode first
+(`XDP_FLAGS_DRV_MODE`), then falls back to **generic/SKB** mode
+(`XDP_FLAGS_SKB_MODE`) if that fails — native mode isn't guaranteed on
+every interface/driver, generic mode works everywhere a veth exists, at
+some per-packet cost. Both attempts include
+`XDP_FLAGS_UPDATE_IF_NOEXIST`, which makes the attach **fail** instead of
+silently replacing whatever program is already attached, so `test_xdp` can
+never accidentally steal the interface out from under a real
+`amf_xdp.o`/`xdp_ngap.o` session already running there. On an `EBUSY`
+failure (something's already attached), prints a specific hint pointing at
+`ip link set dev <iface> xdp off` rather than a bare errno. Records which
+mode won in `*flags_used`, since detaching later needs matching flags.
 
 ### `main()`
 
-Mirrors the real `amf_loader` → `amf_xdp.o` boot order `../README.md`
-describes, in one process instead of two, then adds the attach/monitor/
-detach loop that role doesn't otherwise need:
+1. **Root check**, then resolve `ifname` from `argv[1]` or fall back to
+   `DEFAULT_IFACE`, then install the signal handlers.
+2. **Wait for the interface** (`wait_for_ifindex()`) — requirement 1,
+   "attach automatically."
+3. **Load `xdp_ngap.bpf.o`.** `bpf_object__open_file()` +
+   `bpf_object__load()`, then `bpf_object__find_program_by_name()` for
+   `"xdp_prog"` and `bpf_program__fd()` for its fd.
+4. **Start draining `events`.** `bpf_object__find_map_by_name()` +
+   `bpf_map__fd()` + `ring_buffer__new(fd, handle_ngap_event, NULL, NULL)`
+   — done *before* attaching, so no event submitted the instant
+   `attach_xdp()` succeeds can be missed.
+5. **Attach** via `attach_xdp()`.
+6. **Record `our_prog_id`** — `bpf_obj_get_info_by_fd(prog_fd, &info, ...)`
+   → `info.id`. This is the baseline the watchdog loop compares against;
+   it's this process's own program's kernel-assigned id, not anything
+   read back off the interface.
+7. **Watchdog loop** (requirement 2, "alert ... in any case") — every
+   tick:
+   - `ring_buffer__poll(rb, POLL_INTERVAL_SEC * 1000)` both drains
+     `events` (firing `handle_ngap_event()` for anything queued) *and*
+     provides the tick's timing — it blocks up to `POLL_INTERVAL_SEC`
+     seconds but wakes early the moment an event arrives, so NGAP records
+     print with real latency instead of batching up to once per tick. A
+     negative return other than `-EINTR` (this process's own signal
+     handler interrupting the wait) is a real libbpf error — alerted on,
+     but not fatal to the watchdog loop.
+   - `if_nametoindex(ifname) == 0` → the interface itself is gone. Alert
+     once (state-gated, see below), then block in `wait_for_ifindex()`
+     until it reappears, then re-attach with the *same* `prog_fd` (the
+     loaded program itself was never affected by the interface vanishing,
+     only its attachment was).
+   - ifindex resolves but to a **different** number than before → the
+     named interface was deleted and recreated between polls without ever
+     being observed as absent. Treated the same as a detach: re-attach at
+     the new ifindex.
+   - `bpf_xdp_query_id(ifindex, 0, &cur_prog_id)` → `0` means nothing is
+     attached anymore (`ip link ... xdp off` or equivalent) — alert, then
+     re-attach automatically. A **different**, nonzero id means some other
+     program replaced ours — alert, but deliberately does **not** try to
+     reclaim the interface (silently overriding someone else's program
+     would be just as surprising as the replacement itself). Matching
+     `our_prog_id` and no prior alert state → stays completely silent,
+     the same "don't print a heartbeat when nothing changed" convention
+     `map_test.md`'s tests follow.
+   - All of the above is gated by a 4-state `enum` (`STATE_ATTACHED` /
+     `STATE_DETACHED` / `STATE_REPLACED` / `STATE_IFACE_GONE`) so each
+     alert prints exactly once per state **transition**, with a matching
+     "attached again" line when it recovers, instead of repeating every
+     `POLL_INTERVAL_SEC` for as long as the underlying problem persists.
+8. **On Ctrl+C:** logs the shutdown, calls `bpf_xdp_detach()` if the last
+   known state was `STATE_ATTACHED`/`STATE_REPLACED` (nothing to detach if
+   the interface itself is gone), then `ring_buffer__free(rb)` and
+   `bpf_object__close(obj)`.
 
-1. **Resolve the interface.** `if_nametoindex(ifname)` — fails loudly
-   with a clear message if the named interface doesn't exist, rather than
-   letting `bpf_xdp_attach()` fail later with a less obvious error.
-2. **Load `amf_xdp.o`.** `bpf_object__open_file()` + `bpf_object__load()`
-   — this is also the point at which `sm_nodes`/`sm_edges` get
-   created+pinned (or reused, if a real `amf_loader`/prior run already
-   populated them) per `../sm_map.c`'s `LIBBPF_PIN_BY_NAME` declarations.
-3. **Look up** the program (`amf_xdp_enforce`) and all four maps it
-   declares (`sm_nodes`, `sm_edges`, `amf_xdp_stats`, `ue_state_map`) by
-   name.
-4. **(Re)populate the FSM table.** `fx_populate_nodes()`/
-   `fx_populate_edges()`, unconditionally — an idempotent upsert
-   (`BPF_ANY`), exactly like `amf_loader.c`'s `sm_map_populate()` runs
-   every time `amf_loader` starts, regardless of prior state.
-5. **Attach.**
-   ```c
-   __u32 xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST | XDP_FLAGS_SKB_MODE;
-   bpf_xdp_attach(ifindex, prog_fd, xdp_flags, NULL);
-   ```
-   - `XDP_FLAGS_SKB_MODE` (generic mode) works on any interface, including
-     a veth pair, without needing native driver-level XDP support — the
-     same portability tradeoff `../README.md`'s own `ip link set ... xdp`
-     command implicitly makes.
-   - `XDP_FLAGS_UPDATE_IF_NOEXIST` makes the attach **fail** instead of
-     silently replacing whatever program is already attached — so running
-     this monitor can never accidentally steal the program out from under
-     a real production `amf_xdp.o` that's already running on the same
-     interface.
-6. **Install signal handlers** (`SIGINT`/`SIGTERM` → set a
-   `volatile sig_atomic_t g_stop`), same pattern `../amf_loader.c` uses.
-7. **Monitor loop:** once a second, read all three `amf_xdp_stats`
-   counters; if any changed since the last tick, print a timestamped
-   summary line (`PASS=n(+d) DROP=n(+d) STATE_INVALID=n(+d)`) plus a full
-   `dump_ue_state_map()`. Stays silent on ticks where nothing changed,
-   rather than printing a heartbeat line every second regardless.
-8. **On Ctrl+C:** `bpf_xdp_detach(ifindex, xdp_flags, NULL)` removes the
-   program from the interface, then `bpf_object__close(obj)` closes the
-   program fd and every map fd this object owns.
+## Notes / things this watchdog deliberately does NOT do
 
-## Notes / things this monitor deliberately does NOT do
-
-- **No assertions, no exit code.** This is an observability tool, not a
-  test — see "Why a monitor instead of an automated test" above. If you
-  want deterministic, CI-runnable coverage of the parsing logic itself,
-  that's what a `BPF_PROG_TEST_RUN`-based test would be for; this file no
-  longer is one.
-- **Doesn't generate any traffic itself.** You need a real (or simulated)
-  SCTP/NGAP source and some ordinary HTTP traffic on the same interface to
-  see the two behaviors contrast. `ip netns`/`veth` pairs plus `curl` for
-  the HTTP side, and a real or scripted SCTP association carrying an NGAP
-  `InitialUEMessage` for the other, are outside this file's scope.
-- **Rate limiting and FSM-mismatch flagging** (`amf_xdp_rate_map`,
-  `STAT_DROP`, `STAT_STATE_INVALID` actually going non-zero) will show up
-  in the monitor output if real traffic triggers them, but nothing here
-  drives those cases deliberately — you'd need a real flood
-  (>50 `InitialUEMessage`/s from one source) or a source already
-  mid-registration receiving an out-of-spec label, respectively.
+- **No assertions, no pass/fail exit code.** Like the original design this
+  file replaced, this is an operational tool, not a `make test` check —
+  see `WATCH_BINS` in the Makefile.
+- **Doesn't decode NGAP any further than `xdp_ngap.c` already did.**
+  `handle_ngap_event()` prints the raw `procedureCode`/`criticality` bytes
+  `xdp_prog()` read off the wire, same as its old `bpf_printk()` call did
+  — no ASN.1 PER decode, no procedure-code-to-name lookup. `xdp_prog()`
+  itself no longer calls `bpf_printk()` (see `../xdp_ngap_event.h`'s file
+  header) — the unrelated, already-unused `dump_bytes()` helper still has
+  one in its body, but nothing calls that function, so there's nothing
+  left on `trace_pipe` for this program in practice.
+- **Doesn't reclaim an interface a different program took over.** See
+  `STATE_REPLACED` above — alerts, but leaves the other program in place
+  rather than fighting over it every poll.
+- **Polls rather than subscribing to netlink link events.** There's no
+  "XDP program detached" netlink notification to listen for instead;
+  `POLL_INTERVAL_SEC`-interval polling via `bpf_xdp_query_id()` is the
+  same approach real XDP loaders (e.g. `xdp-loader`) use for this.
