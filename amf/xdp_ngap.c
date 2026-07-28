@@ -87,7 +87,13 @@ static __always_inline int handle_sctp(struct iphdr *iph, void *data_end)
     /* Report this NGAP DATA chunk to the loader */
     struct xdp_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (e) {
-        __builtin_memset(e, 0, sizeof(*e));
+        /* Zero everything EXCEPT raw[] (the last, large field) -- clang
+         * can't inline a memset() over the whole struct now that raw[]
+         * is MTU-sized (see handle_other()'s comment); this event type
+         * never touches raw[]/raw_len anyway, and the loader only reads
+         * those fields when e->type == XDP_EVT_OTHER, so leaving raw[]
+         * un-zeroed here is harmless, not just a workaround. */
+        __builtin_memset(e, 0, __builtin_offsetof(struct xdp_event, raw));
         e->type           = XDP_EVT_NGAP;
         e->saddr          = iph->saddr;
         e->daddr          = iph->daddr;
@@ -144,7 +150,9 @@ static __always_inline int handle_tls(struct iphdr *iph, void *data_end)
 
     struct xdp_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (e) {
-        __builtin_memset(e, 0, sizeof(*e));
+        /* See handle_sctp()'s comment -- same offsetof() trick, same
+         * reason (raw[]/raw_len are never read for this event type). */
+        __builtin_memset(e, 0, __builtin_offsetof(struct xdp_event, raw));
         e->type  = XDP_EVT_HTTPS;
         e->saddr = iph->saddr;
         e->daddr = iph->daddr;
@@ -177,7 +185,16 @@ static __always_inline int handle_other(struct xdp_md *ctx, struct iphdr *iph, v
 {
     struct xdp_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (e) {
-        __builtin_memset(e, 0, sizeof(*e));
+        /* Zero everything EXCEPT raw[] itself -- clang-for-BPF can't
+         * inline a memset() over the whole struct now that raw[] is
+         * MTU-sized (1480 bytes); it falls back to an actual memset()
+         * call, which doesn't exist in a BPF program ("A call to
+         * built-in function 'memset' is not supported"). Not a problem
+         * here: raw[] gets overwritten by bpf_xdp_load_bytes() below up
+         * to `want` bytes, and the loader never reads past raw_len, so
+         * whatever's left in raw[want..] (stale ringbuf memory from a
+         * prior reservation) is simply never seen. */
+        __builtin_memset(e, 0, __builtin_offsetof(struct xdp_event, raw));
         e->type  = XDP_EVT_OTHER;
         e->saddr = iph->saddr;
         e->daddr = iph->daddr;
