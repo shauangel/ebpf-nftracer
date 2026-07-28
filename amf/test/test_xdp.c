@@ -45,6 +45,8 @@
 
 #include <arpa/inet.h>        /* inet_ntop(), INET_ADDRSTRLEN */
 #include <net/if.h>          /* if_nametoindex() */
+#include <netdb.h>           /* getnameinfo(), NI_MAXHOST -- NF name resolution */
+#include <netinet/in.h>      /* struct sockaddr_in */
 #include <linux/if_link.h>   /* XDP_FLAGS_* attach-mode flags */
 
 #include <bpf/libbpf.h>      /* bpf_object__open_file/__load, bpf_program__fd, ring_buffer__* */
@@ -95,6 +97,64 @@ static void print_ts(FILE *f)
         printf(__VA_ARGS__); \
         printf("\n"); \
     } while (0)
+
+/* ── NF name resolution for XDP_EVT_OTHER's src/dst -------------------
+ * This environment has no docker-compose/free5gc config checked into
+ * this repo to hardcode an IP->NF table from, and all these NFs run on
+ * one host -- so instead of guessing, this does a real reverse lookup
+ * via getnameinfo(), which consults the host's normal NSS resolution
+ * (/etc/hosts, then DNS/whatever else is configured). If that host has
+ * hostname entries for each NF's IP (e.g. /etc/hosts lines, or a
+ * container network with working reverse DNS), you'll see that name
+ * here; if not, this falls back to the plain IP, same as before -- no
+ * behavior lost either way.
+ *
+ * A tiny linear-scan cache avoids repeating the lookup (a real
+ * getnameinfo() call, potentially hitting the resolver) for every
+ * packet from the same address -- this runs inside
+ * handle_xdp_event(), which itself runs inside ring_buffer__poll(), so a
+ * slow repeated lookup would directly stall this loader's detach-
+ * watchdog tick. */
+#define ADDR_CACHE_MAX 32
+static struct {
+    __u32 addr; /* network byte order, same as struct xdp_event's saddr/daddr */
+    char  name[80];
+} addr_cache[ADDR_CACHE_MAX];
+static int addr_cache_count = 0;
+
+static void resolve_addr(__u32 addr_be, char *out, size_t out_sz)
+{
+    for (int i = 0; i < addr_cache_count; i++) {
+        if (addr_cache[i].addr == addr_be) {
+            snprintf(out, out_sz, "%s", addr_cache[i].name);
+            return;
+        }
+    }
+
+    char numeric[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &addr_be, numeric, sizeof(numeric));
+
+    struct sockaddr_in sa = {0};
+    sa.sin_family      = AF_INET;
+    sa.sin_addr.s_addr = addr_be;
+
+    char host[NI_MAXHOST];
+    char resolved[80];
+    if (getnameinfo((struct sockaddr *)&sa, sizeof(sa), host, sizeof(host), NULL, 0, 0) == 0 &&
+        strcmp(host, numeric) != 0) {
+        /* Got back an actual name, not just the address echoed back. */
+        snprintf(resolved, sizeof(resolved), "%s(%s)", host, numeric);
+    } else {
+        snprintf(resolved, sizeof(resolved), "%s", numeric);
+    }
+
+    if (addr_cache_count < ADDR_CACHE_MAX) {
+        addr_cache[addr_cache_count].addr = addr_be;
+        snprintf(addr_cache[addr_cache_count].name, sizeof(addr_cache[addr_cache_count].name), "%s", resolved);
+        addr_cache_count++;
+    }
+    snprintf(out, out_sz, "%s", resolved);
+}
 
 /* ── lightweight IP/TCP header decoder for XDP_EVT_OTHER's raw[] dump ───
  * Pure userspace, parses the same bytes the hex dump already shows --
@@ -180,11 +240,30 @@ static void decode_ip_packet(const __u8 *raw, __u16 raw_len)
            sport, dport, seq, ack, flag_str, window, doff);
 
     __u16 hdrs_len = ihl + doff;
-    if (raw_len > hdrs_len)
-        printf("    payload: %u byte(s) follow the TCP header in this capture\n",
-               raw_len - hdrs_len);
-    else
+    if (raw_len <= hdrs_len) {
         printf("    payload: none (pure control segment, e.g. handshake/teardown)\n");
+        return;
+    }
+
+    /* Examine the payload: same hex+ASCII layout as the full-packet dump
+     * below, but starting right after the headers and labeled separately
+     * so it doesn't have to be found by hand-counting into the raw dump.
+     * Still just the first XDP_EVT_OTHER_RAW_MAX-hdrs_len bytes of
+     * whatever this segment actually carries -- a large HTTP/2 frame or
+     * JSON body can still run past this capture's end. */
+    __u16 payload_len = raw_len - hdrs_len;
+    printf("    payload: %u byte(s) captured:\n", payload_len);
+    for (__u16 off = 0; off < payload_len; off += 16) {
+        char hex[16 * 3 + 1] = {0};
+        char ascii[17] = {0};
+        int n = (payload_len - off < 16) ? (payload_len - off) : 16;
+        for (int i = 0; i < n; i++) {
+            __u8 b = raw[hdrs_len + off + i];
+            snprintf(hex + i * 3, 4, "%02x ", b);
+            ascii[i] = isprint(b) ? (char)b : '.';
+        }
+        printf("      %04u: %-48s %s\n", (unsigned)off, hex, ascii);
+    }
 }
 
 /* ring_buffer__new()'s callback -- fires once per struct xdp_event
@@ -216,7 +295,7 @@ static int handle_xdp_event(void *ctx, void *data, size_t data_sz)
         LOG("HTTPS %s:%u -> %s:%u  %s",
             src, e->sport, dst, e->dport, e->tls_record);
         break;
-    case XDP_EVT_OTHER:
+    case XDP_EVT_OTHER: {
         /* DIAGNOSTIC/TEMPORARY event -- see handle_other() in
          * ../xdp_ngap.c, fires for every non-SCTP packet with a raw byte
          * dump starting at the IP header (confirmed to sit right at
@@ -225,9 +304,15 @@ static int handle_xdp_event(void *ctx, void *data, size_t data_sz)
          * worth reading (proto, ports, TCP flags, ...); the hex+ASCII
          * dump underneath is the raw ground truth in case the decoder
          * misses something (a fragmented/malformed header, non-TCP
-         * traffic, etc). */
+         * traffic, etc). src/dst are resolved via resolve_addr() here
+         * (best-effort reverse lookup -> NF name, falls back to the
+         * plain IP) instead of the raw inet_ntop() strings used above. */
+        char src_name[80], dst_name[80];
+        resolve_addr(e->saddr, src_name, sizeof(src_name));
+        resolve_addr(e->daddr, dst_name, sizeof(dst_name));
+
         LOG("OTHER %s -> %s  (%u raw bytes captured, IP header onward)",
-            src, dst, e->raw_len);
+            src_name, dst_name, e->raw_len);
         decode_ip_packet(e->raw, e->raw_len);
         for (__u16 off = 0; off < e->raw_len; off += 16) {
             char hex[16 * 3 + 1] = {0};
@@ -240,6 +325,7 @@ static int handle_xdp_event(void *ctx, void *data, size_t data_sz)
             printf("    %04u: %-48s %s\n", (unsigned)off, hex, ascii);
         }
         break;
+    }
     default:
         LOG("xdp_event: unknown type=%u from %s:%u -> %s:%u", e->type, src, e->sport, dst, e->dport);
         break;

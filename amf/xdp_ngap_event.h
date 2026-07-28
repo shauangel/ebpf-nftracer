@@ -34,8 +34,17 @@
 /* TEMPORARY: raw-byte capture size for XDP_EVT_OTHER -- every non-SCTP
  * packet gets one of these (see handle_other() in xdp_ngap.c). Remove
  * this and raw/raw_len below once the manual inspection this exists for
- * is done. */
-#define XDP_EVT_OTHER_RAW_MAX 64
+ * is done.
+ *
+ * 64 was enough to see IP+TCP headers but left ~0 bytes for payload once
+ * TCP options (timestamps etc.) are counted -- e.g. a 20-byte IP header +
+ * 32-byte TCP header already eats 52 of the 64. Bumped to 256 so a
+ * PSH,ACK segment with real application data actually has room to show
+ * up. Still a single bounded, unrolled copy loop in handle_other() (same
+ * verifier-friendly pattern as before) -- if this ever fails to load
+ * with a "program too large"/complexity error on your kernel, lower this
+ * back down. */
+#define XDP_EVT_OTHER_RAW_MAX 256
 
 /*
  * Field usage by type:
