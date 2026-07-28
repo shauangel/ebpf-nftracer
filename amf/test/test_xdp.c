@@ -229,64 +229,86 @@ static void decode_tcp_flags(__u8 flags, char *out, size_t out_sz)
         strncpy(out, "-", out_sz - 1);
 }
 
-/* Decodes raw[0..raw_len) as an IPv4 header, then (if protocol == TCP
- * and enough bytes were captured) the TCP header right after it. Prints
- * "(too short)"/partial info rather than guessing at missing bytes --
- * raw[] is a fixed 64-byte capture (see XDP_EVT_OTHER_RAW_MAX), so a
- * packet with TCP options can easily have its payload (or even the full
- * TCP header) cut off. */
-static void decode_ip_packet(const __u8 *raw, __u16 raw_len)
+/* Decoded fields, IP header first, then (if proto == TCP and enough
+ * bytes were captured) the TCP header right after it. Populated by
+ * decode_ip_tcp() below with NO printing -- callers get to decide
+ * whether anything here is worth displaying (namely: whether there's a
+ * payload) before printing a single character. */
+struct ip_tcp_info {
+    __u8  version, ihl, ttl, proto;
+    __u16 total_len;
+
+    int   has_tcp;         /* 1 if proto == TCP and its header was fully captured */
+    __u16 sport, dport;
+    __u32 seq, ack;
+    __u8  doff;             /* TCP data offset, in bytes (already *4'd) */
+    __u8  flags;
+    __u16 window;
+
+    __u16 hdrs_len;         /* ihl + doff -- only meaningful if has_tcp */
+    __u16 payload_len;      /* raw_len - hdrs_len, 0 if no TCP or nothing follows the headers */
+};
+
+/* Parses raw[0..raw_len) into *info. raw[] is a fixed-size capture (see
+ * XDP_EVT_OTHER_RAW_MAX), so a packet with TCP options can easily have
+ * its payload (or even the full TCP header) cut off -- info.has_tcp /
+ * info.payload_len reflect exactly how far parsing actually got, rather
+ * than guessing at missing bytes. Returns 0 only if raw_len is too short
+ * for even a bare IP header (*info is still zeroed in that case). */
+static int decode_ip_tcp(const __u8 *raw, __u16 raw_len, struct ip_tcp_info *info)
 {
-    if (raw_len < 20) {
-        printf("    (too short to decode: %u bytes, need >= 20 for an IP header)\n", raw_len);
-        return;
-    }
+    memset(info, 0, sizeof(*info));
+    if (raw_len < 20)
+        return 0;
 
-    __u8  version   = raw[0] >> 4;
-    __u8  ihl       = (raw[0] & 0x0F) * 4; /* IHL is in 32-bit words */
-    __u16 total_len = ((__u16)raw[2] << 8) | raw[3];
-    __u8  ttl       = raw[8];
-    __u8  proto     = raw[9];
+    info->version   = raw[0] >> 4;
+    info->ihl       = (raw[0] & 0x0F) * 4; /* IHL is in 32-bit words */
+    info->total_len = ((__u16)raw[2] << 8) | raw[3];
+    info->ttl       = raw[8];
+    info->proto     = raw[9];
 
+    if (info->proto != 6 /* TCP */ || raw_len < (__u16)(info->ihl + 20))
+        return 1; /* not TCP, or its header got cut off in this capture */
+
+    const __u8 *tcp = raw + info->ihl;
+    info->has_tcp = 1;
+    info->sport   = ((__u16)tcp[0] << 8) | tcp[1];
+    info->dport   = ((__u16)tcp[2] << 8) | tcp[3];
+    info->seq     = ((__u32)tcp[4] << 24) | ((__u32)tcp[5] << 16) | ((__u32)tcp[6] << 8) | tcp[7];
+    info->ack     = ((__u32)tcp[8] << 24) | ((__u32)tcp[9] << 16) | ((__u32)tcp[10] << 8) | tcp[11];
+    info->doff    = (tcp[12] >> 4) * 4;
+    info->flags   = tcp[13];
+    info->window  = ((__u16)tcp[14] << 8) | tcp[15];
+
+    info->hdrs_len = info->ihl + info->doff;
+    if (raw_len > info->hdrs_len)
+        info->payload_len = raw_len - info->hdrs_len;
+
+    return 1;
+}
+
+static void print_ip_tcp_info(const struct ip_tcp_info *info)
+{
     printf("    IP:  v=%u ihl=%u total_len=%u ttl=%u proto=%s(%u)\n",
-           version, ihl, total_len, ttl, ip_proto_name(proto), proto);
+           info->version, info->ihl, info->total_len, info->ttl,
+           ip_proto_name(info->proto), info->proto);
 
-    if (proto != 6 /* TCP */)
+    if (!info->has_tcp)
         return;
-    if (raw_len < (__u16)(ihl + 20)) {
-        printf("    TCP: (header cut off -- only %u of >= %u bytes captured)\n",
-               raw_len, ihl + 20);
-        return;
-    }
-
-    const __u8 *tcp   = raw + ihl;
-    __u16 sport       = ((__u16)tcp[0] << 8) | tcp[1];
-    __u16 dport       = ((__u16)tcp[2] << 8) | tcp[3];
-    __u32 seq         = ((__u32)tcp[4] << 24) | ((__u32)tcp[5] << 16) | ((__u32)tcp[6] << 8) | tcp[7];
-    __u32 ack         = ((__u32)tcp[8] << 24) | ((__u32)tcp[9] << 16) | ((__u32)tcp[10] << 8) | tcp[11];
-    __u8  doff        = (tcp[12] >> 4) * 4; /* TCP data offset, in 32-bit words */
-    __u8  flags       = tcp[13];
-    __u16 window      = ((__u16)tcp[14] << 8) | tcp[15];
 
     char flag_str[32];
-    decode_tcp_flags(flags, flag_str, sizeof(flag_str));
-
+    decode_tcp_flags(info->flags, flag_str, sizeof(flag_str));
     printf("    TCP: sport=%u dport=%u seq=%u ack=%u flags=[%s] window=%u hdrlen=%u\n",
-           sport, dport, seq, ack, flag_str, window, doff);
+           info->sport, info->dport, info->seq, info->ack, flag_str, info->window, info->doff);
+}
 
-    __u16 hdrs_len = ihl + doff;
-    if (raw_len <= hdrs_len) {
-        printf("    payload: none (pure control segment, e.g. handshake/teardown)\n");
-        return;
-    }
-
-    /* Examine the payload: same hex+ASCII layout as the full-packet dump
-     * below, but starting right after the headers and labeled separately
-     * so it doesn't have to be found by hand-counting into the raw dump.
-     * Still just the first XDP_EVT_OTHER_RAW_MAX-hdrs_len bytes of
-     * whatever this segment actually carries -- a large HTTP/2 frame or
-     * JSON body can still run past this capture's end. */
-    __u16 payload_len = raw_len - hdrs_len;
+/* Hex+ASCII dump of just the payload bytes (raw[hdrs_len .. hdrs_len+
+ * payload_len)), labeled separately from the full-packet dump so it
+ * doesn't have to be found by hand-counting into it. Still just whatever
+ * fits in this capture -- a large HTTP/2 frame or JSON body can run past
+ * XDP_EVT_OTHER_RAW_MAX's end. Only ever called when payload_len > 0. */
+static void print_payload_dump(const __u8 *raw, __u16 hdrs_len, __u16 payload_len)
+{
     printf("    payload: %u byte(s) captured:\n", payload_len);
     for (__u16 off = 0; off < payload_len; off += 16) {
         char hex[16 * 3 + 1] = {0};
@@ -335,20 +357,28 @@ static int handle_xdp_event(void *ctx, void *data, size_t data_sz)
          * ../xdp_ngap.c, fires for every non-SCTP packet with a raw byte
          * dump starting at the IP header (confirmed to sit right at
          * pkt+14 -- see the earlier pkt_addr/iph_addr capture this
-         * replaced). decode_ip_packet() pulls out the fields actually
-         * worth reading (proto, ports, TCP flags, ...); the hex+ASCII
-         * dump underneath is the raw ground truth in case the decoder
-         * misses something (a fragmented/malformed header, non-TCP
-         * traffic, etc). src/dst are resolved via resolve_addr() here
-         * (best-effort reverse lookup -> NF name, falls back to the
-         * plain IP) instead of the raw inet_ntop() strings used above. */
+         * replaced). Decoded first, silently: pure control segments
+         * (no payload -- SYN/ACK/FIN with nothing behind the headers)
+         * print NOTHING at all, since there's nothing worth looking at.
+         * Only once payload_len > 0 do we print anything -- the
+         * addresses, the decoded IP/TCP fields, the payload itself, and
+         * the full raw hex+ASCII dump underneath as ground truth in case
+         * the decoder missed something (fragmented/malformed header,
+         * non-TCP traffic, etc). */
+        struct ip_tcp_info info;
+        decode_ip_tcp(e->raw, e->raw_len, &info);
+        if (info.payload_len == 0)
+            break;
+
         char src_name[80], dst_name[80];
         resolve_addr(e->saddr, src_name, sizeof(src_name));
         resolve_addr(e->daddr, dst_name, sizeof(dst_name));
 
-        LOG("OTHER %s -> %s  (%u raw bytes captured, IP header onward)",
+        LOG("TCP %s -> %s  (%u raw bytes captured, IP header onward)",
             src_name, dst_name, e->raw_len);
-        decode_ip_packet(e->raw, e->raw_len);
+        print_ip_tcp_info(&info);
+        print_payload_dump(e->raw, info.hdrs_len, info.payload_len);
+
         for (__u16 off = 0; off < e->raw_len; off += 16) {
             char hex[16 * 3 + 1] = {0};
             char ascii[17] = {0};
