@@ -31,13 +31,19 @@
 #define XDP_EVT_HTTPS 1   /* TCP payload starting with a TLS record (Handshake or Application Data) -- HTTPS is TLS, not plaintext HTTP, so this is identified at the TLS record layer, not by an HTTP request line */
 #define XDP_EVT_OTHER 2   /* DIAGNOSTIC: any non-SCTP packet, no protocol-specific parsing at all -- see handle_other() in xdp_ngap.c. Exists to check whether non-SCTP traffic reaches xdp_prog at all before narrowing back down to TLS/HTTPS specifically. */
 
+/* TEMPORARY: raw-byte capture size for XDP_EVT_OTHER -- every non-SCTP
+ * packet gets one of these (see handle_other() in xdp_ngap.c). Remove
+ * this and raw/raw_len below once the manual inspection this exists for
+ * is done. */
+#define XDP_EVT_OTHER_RAW_MAX 64
+
 /*
  * Field usage by type:
  *
  *   XDP_EVT_NGAP  -> type, saddr, daddr, sport, dport, chunk_len,
  *                    procedure_code, criticality
  *   XDP_EVT_HTTPS -> type, saddr, daddr, sport, dport, tls_record
- *   XDP_EVT_OTHER -> type, saddr, daddr, pkt_addr, iph_addr, iph_off
+ *   XDP_EVT_OTHER -> type, saddr, daddr, raw, raw_len
  */
 struct xdp_event {
     __u8  type;              /* XDP_EVT_* */
@@ -54,18 +60,8 @@ struct xdp_event {
 
     char  tls_record[8];              /* HTTPS: NUL-terminated TLS record tag -- "TLS-HS" (Handshake: ClientHello/ServerHello/...) or "TLS-AD" (Application Data: the encrypted HTTPS payload) */
 
-    /* OTHER (TEMPORARY/DIAGNOSTIC): memory addresses, not packet content
-     * -- see handle_other() in xdp_ngap.c. pkt_addr is ctx->data (the
-     * start of this XDP frame's buffer) and iph_addr is where the IP
-     * header ("the internet element") sits inside it; iph_off is just
-     * iph_addr - pkt_addr, precomputed since pointer arithmetic on two
-     * __u64 in printf output is annoying. These are per-packet kernel
-     * buffer addresses (each packet gets its own buffer) -- useful for
-     * seeing the IP header's offset/alignment within the frame, NOT a
-     * fixed location you can look up again later. */
-    __u64 pkt_addr;
-    __u64 iph_addr;
-    __u64 iph_off;
+    __u16 raw_len;                     /* OTHER (TEMPORARY): number of valid bytes in raw[] below */
+    __u8  raw[XDP_EVT_OTHER_RAW_MAX];   /* OTHER (TEMPORARY): raw bytes starting at the IP header itself (iph, confirmed to sit at pkt+14 == pkt+sizeof(struct ethhdr) via the pkt_addr/iph_addr/iph_off capture this replaced) -- see handle_other() in xdp_ngap.c. test_xdp.c prints these as a hex+ASCII dump. */
 };
 
 #endif /* XDP_NGAP_EVENT_H */

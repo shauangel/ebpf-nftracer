@@ -34,6 +34,7 @@
  * CAP_BPF the rest of this test suite already requires).
  */
 
+#include <ctype.h>
 #include <errno.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -126,21 +127,24 @@ static int handle_xdp_event(void *ctx, void *data, size_t data_sz)
         break;
     case XDP_EVT_OTHER:
         /* DIAGNOSTIC/TEMPORARY event -- see handle_other() in
-         * ../xdp_ngap.c, fires for every non-SCTP packet. No packet
-         * CONTENT here at all -- just where the IP header ("the internet
-         * element") actually lives in memory: pkt_addr is the start of
-         * this XDP frame's own buffer, iph_addr is the IP header's
-         * address within it, iph_off is the byte offset between them
-         * (normally == sizeof(struct ethhdr), i.e. right after the
-         * Ethernet header). These are per-packet kernel buffer
-         * addresses -- expect them to differ packet to packet, that's
-         * normal; what's worth checking is whether iph_off stays
-         * constant. */
-        LOG("OTHER %s -> %s  pkt=0x%llx  iphdr=0x%llx  (+%llu)",
-            src, dst,
-            (unsigned long long)e->pkt_addr,
-            (unsigned long long)e->iph_addr,
-            (unsigned long long)e->iph_off);
+         * ../xdp_ngap.c, fires for every non-SCTP packet with a raw byte
+         * dump starting at the IP header (confirmed to sit right at
+         * pkt+14 -- see the earlier pkt_addr/iph_addr capture this
+         * replaced). Standard hex+ASCII dump: each row is 16 bytes as
+         * hex, then the same bytes rendered as characters (printable
+         * bytes as themselves, everything else as '.'). */
+        LOG("OTHER %s -> %s  (%u raw bytes captured, IP header onward)",
+            src, dst, e->raw_len);
+        for (__u16 off = 0; off < e->raw_len; off += 16) {
+            char hex[16 * 3 + 1] = {0};
+            char ascii[17] = {0};
+            int n = (e->raw_len - off < 16) ? (e->raw_len - off) : 16;
+            for (int i = 0; i < n; i++) {
+                snprintf(hex + i * 3, 4, "%02x ", e->raw[off + i]);
+                ascii[i] = isprint(e->raw[off + i]) ? (char)e->raw[off + i] : '.';
+            }
+            printf("    %04u: %-48s %s\n", (unsigned)off, hex, ascii);
+        }
         break;
     default:
         LOG("xdp_event: unknown type=%u from %s:%u -> %s:%u", e->type, src, e->sport, dst, e->dport);

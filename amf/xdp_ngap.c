@@ -158,21 +158,36 @@ static __always_inline int handle_tls(struct iphdr *iph, void *data_end)
 }
 
 // DIAGNOSTIC: catch-all for anything that isn't SCTP. No protocol-
-// specific parsing, no packet content read at all -- reports
-// source/destination IP plus WHERE the IP header ("the internet element")
-// actually sits in memory: its address, and the frame's own start
-// address, for every non-SCTP packet.
-static __always_inline int handle_other(void *data, struct iphdr *iph)
+// specific parsing -- reports source/destination IP plus a raw byte dump
+// of EVERY such packet, starting at the IP header itself (confirmed via
+// the earlier pkt_addr/iph_addr capture to sit right at pkt+14, i.e.
+// pkt+sizeof(struct ethhdr), same as any standard untagged Ethernet
+// frame), for the loader to print as a hex+ASCII dump.
+static __always_inline int handle_other(struct iphdr *iph, void *data_end)
 {
     struct xdp_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (e) {
         __builtin_memset(e, 0, sizeof(*e));
-        e->type     = XDP_EVT_OTHER;
-        e->saddr    = iph->saddr;
-        e->daddr    = iph->daddr;
-        e->pkt_addr = (__u64)(unsigned long)data;
-        e->iph_addr = (__u64)(unsigned long)iph;
-        e->iph_off  = e->iph_addr - e->pkt_addr; /* == sizeof(struct ethhdr), but computed rather than assumed */
+        e->type  = XDP_EVT_OTHER;
+        e->saddr = iph->saddr;
+        e->daddr = iph->daddr;
+
+        /* Dump raw bytes starting at the IP header itself (covers the IP
+         * header's own fields -- TTL, flags, options, ... -- plus
+         * whatever L4 protocol follows, in one capture). Same bounded,
+         * unrolled-loop pattern dump_bytes() above already uses, so it
+         * stays verifier-friendly. */
+        __u8 *src = (__u8 *)iph;
+        __u16 n = 0;
+        #pragma unroll
+        for (int i = 0; i < XDP_EVT_OTHER_RAW_MAX; i++) {
+            if ((void *)(src + i + 1) > data_end)
+                break;
+            e->raw[i] = src[i];
+            n = i + 1;
+        }
+        e->raw_len = n;
+
         bpf_ringbuf_submit(e, 0);
     }
 
@@ -199,9 +214,8 @@ int xdp_prog(struct xdp_md *ctx)
         return handle_sctp(iph, data_end);
 
     // DIAGNOSTIC: treat every other non-SCTP packet as "TCP" for this
-    // test and report its src/dest IP + where the IP header lives in
-    // memory via handle_other() -- bypasses handle_tls()'s TLS-record
-    // matching entirely so every non-SCTP packet prints, not just the
-    // ones that look like TLS.
-    return handle_other(data, iph);
+    // test and report its src/dest IP + raw bytes via handle_other() --
+    // bypasses handle_tls()'s TLS-record matching entirely so every
+    // non-SCTP packet prints, not just the ones that look like TLS.
+    return handle_other(iph, data_end);
 }
