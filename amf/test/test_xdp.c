@@ -34,7 +34,6 @@
  * CAP_BPF the rest of this test suite already requires).
  */
 
-#include <ctype.h>
 #include <errno.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -125,23 +124,24 @@ static int handle_xdp_event(void *ctx, void *data, size_t data_sz)
         LOG("HTTPS %s:%u -> %s:%u  %s",
             src, e->sport, dst, e->dport, e->tls_record);
         break;
-    case XDP_EVT_OTHER: {
+    case XDP_EVT_OTHER:
         /* DIAGNOSTIC/TEMPORARY event -- see handle_other() in
-         * ../xdp_ngap.c, fires for every non-SCTP packet. Convert each
-         * captured byte to a readable char: printable bytes (letters,
-         * digits, punctuation) print as themselves, everything else
-         * (binary header bytes, control chars) prints as '.' so the
-         * string stays one clean, readable line instead of raw binary
-         * mangling the terminal. */
-        char readable[XDP_EVT_OTHER_RAW_MAX + 1];
-        __u16 n = e->raw_len < XDP_EVT_OTHER_RAW_MAX ? e->raw_len : XDP_EVT_OTHER_RAW_MAX;
-        for (__u16 i = 0; i < n; i++)
-            readable[i] = isprint(e->raw[i]) ? (char)e->raw[i] : '.';
-        readable[n] = '\0';
-
-        LOG("OTHER %s -> %s  (%u bytes) \"%s\"", src, dst, e->raw_len, readable);
+         * ../xdp_ngap.c, fires for every non-SCTP packet. No packet
+         * CONTENT here at all -- just where the IP header ("the internet
+         * element") actually lives in memory: pkt_addr is the start of
+         * this XDP frame's own buffer, iph_addr is the IP header's
+         * address within it, iph_off is the byte offset between them
+         * (normally == sizeof(struct ethhdr), i.e. right after the
+         * Ethernet header). These are per-packet kernel buffer
+         * addresses -- expect them to differ packet to packet, that's
+         * normal; what's worth checking is whether iph_off stays
+         * constant. */
+        LOG("OTHER %s -> %s  pkt=0x%llx  iphdr=0x%llx  (+%llu)",
+            src, dst,
+            (unsigned long long)e->pkt_addr,
+            (unsigned long long)e->iph_addr,
+            (unsigned long long)e->iph_off);
         break;
-    }
     default:
         LOG("xdp_event: unknown type=%u from %s:%u -> %s:%u", e->type, src, e->sport, dst, e->dport);
         break;
