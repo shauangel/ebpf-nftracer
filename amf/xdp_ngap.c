@@ -210,10 +210,22 @@ static __always_inline int handle_other(struct xdp_md *ctx, struct iphdr *iph, v
         __u32 avail  = (__u32)((__u8 *)data_end - (__u8 *)iph);
         __u32 want   = avail < XDP_EVT_OTHER_RAW_MAX ? avail : XDP_EVT_OTHER_RAW_MAX;
 
-        if (bpf_xdp_load_bytes(ctx, offset, e->raw, want) == 0)
-            e->raw_len = (__u16)want;
-        /* else: leave raw_len at 0 (already zeroed above) -- still worth
-         * submitting the event for its saddr/daddr alone. */
+        /* avail is always >= sizeof(struct iphdr) in practice -- xdp_prog()
+         * already checked (void *)(iph + 1) <= data_end before iph was
+         * ever handed to this function -- but the verifier loses that
+         * tight bound across the pointer-subtraction + truncating
+         * (__u32) cast above, leaving `want`'s provable range at
+         * [0, XDP_EVT_OTHER_RAW_MAX]. bpf_xdp_load_bytes()'s length
+         * argument doesn't tolerate a possibly-zero value ("invalid
+         * zero-sized read"), so this explicit branch exists purely to
+         * give the verifier a fact to narrow on: on the path that
+         * reaches the call below, it can now prove want > 0. */
+        if (want > 0) {
+            if (bpf_xdp_load_bytes(ctx, offset, e->raw, want) == 0)
+                e->raw_len = (__u16)want;
+            /* else: leave raw_len at 0 (already zeroed above) -- still
+             * worth submitting the event for its saddr/daddr alone. */
+        }
 
         bpf_ringbuf_submit(e, 0);
     }
