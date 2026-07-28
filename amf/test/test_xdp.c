@@ -1,11 +1,10 @@
 /* Must come before any #include: glibc hides POSIX/BSD extensions this
- * file needs -- localtime_r() (POSIX.1-2001), getnameinfo()/NI_MAXHOST
- * (RFC 3493) -- when compiled with a strict -std=c11 (see this
- * directory's Makefile), unless a feature-test macro says otherwise.
- * _GNU_SOURCE is the blanket "expose everything glibc has" macro; only
- * matters on glibc (Darwin/macOS libc doesn't gate these the same way,
- * which is why this didn't show up until built on the real Linux
- * target). */
+ * file needs -- localtime_r() (POSIX.1-2001), strtok_r() (POSIX.1-2001)
+ * -- when compiled with a strict -std=c11 (see this directory's
+ * Makefile), unless a feature-test macro says otherwise. _GNU_SOURCE is
+ * the blanket "expose everything glibc has" macro; only matters on glibc
+ * (Darwin/macOS libc doesn't gate these the same way, which is why this
+ * didn't show up until built on the real Linux target). */
 #define _GNU_SOURCE
 
 /*
@@ -53,10 +52,9 @@
 #include <time.h>
 #include <unistd.h>
 
-#include <arpa/inet.h>        /* inet_ntop(), INET_ADDRSTRLEN */
+#include <arpa/inet.h>        /* inet_ntop(), inet_pton(), INET_ADDRSTRLEN */
 #include <net/if.h>          /* if_nametoindex() */
-#include <netdb.h>           /* getnameinfo(), NI_MAXHOST -- NF name resolution */
-#include <netinet/in.h>      /* struct sockaddr_in */
+#include <netinet/in.h>      /* struct in_addr -- NF name resolution via `docker inspect` */
 #include <linux/if_link.h>   /* XDP_FLAGS_* attach-mode flags */
 
 #include <bpf/libbpf.h>      /* bpf_object__open_file/__load, bpf_program__fd, ring_buffer__* */
@@ -110,30 +108,79 @@ static void print_ts(FILE *f)
 
 /* ── NF name resolution for XDP_EVT_OTHER's src/dst -------------------
  * This environment has no docker-compose/free5gc config checked into
- * this repo to hardcode an IP->NF table from, and all these NFs run on
- * one host -- so instead of guessing, this does a real reverse lookup
- * via getnameinfo(), which consults the host's normal NSS resolution
- * (/etc/hosts, then DNS/whatever else is configured). If that host has
- * hostname entries for each NF's IP (e.g. /etc/hosts lines, or a
- * container network with working reverse DNS), you'll see that name
- * here; if not, this falls back to the plain IP, same as before -- no
- * behavior lost either way.
+ * this repo to hardcode an IP->NF table from, and these are docker
+ * compose service containers, not host-level hostnames -- so instead of
+ * a host DNS/getnameinfo() reverse lookup (which a process running on
+ * the HOST can't resolve anyway; Docker's embedded DNS that knows
+ * container names is only reachable from inside a container on that
+ * network), this asks Docker directly: `docker inspect` on every running
+ * container reports each one's name and every IP it holds on every
+ * network it's attached to. Built ONCE (lazily, on the first lookup)
+ * into addr_cache[] below rather than re-invoking `docker` per packet --
+ * this runs inside handle_xdp_event(), itself inside
+ * ring_buffer__poll(), so spawning a process per lookup would directly
+ * stall this loader's detach-watchdog tick.
  *
- * A tiny linear-scan cache avoids repeating the lookup (a real
- * getnameinfo() call, potentially hitting the resolver) for every
- * packet from the same address -- this runs inside
- * handle_xdp_event(), which itself runs inside ring_buffer__poll(), so a
- * slow repeated lookup would directly stall this loader's detach-
- * watchdog tick. */
-#define ADDR_CACHE_MAX 32
+ * Falls back to the plain IP for anything not found (a non-container
+ * address, a container started after the cache was built, or `docker`
+ * not being installed/reachable at all) -- no behavior lost either way. */
+#define ADDR_CACHE_MAX 64
 static struct {
     __u32 addr; /* network byte order, same as struct xdp_event's saddr/daddr */
     char  name[80];
 } addr_cache[ADDR_CACHE_MAX];
-static int addr_cache_count = 0;
+static int  addr_cache_count = 0;
+static bool addr_cache_built = false;
+
+/* Runs once: `docker inspect --format '{{.Name}} {{IP}} {{IP}} ...'` on
+ * every running container, one line per container, and caches an entry
+ * per (container, IP) pair -- a container can hold more than one IP if
+ * it's attached to more than one compose network. `docker ps -q`
+ * expanding to nothing (no containers, or `docker` missing entirely)
+ * just means the inspect line has no arguments and fails harmlessly;
+ * either way popen()'s stdout ends up empty and the cache stays empty,
+ * so every address falls back to its plain IP -- same as if this
+ * function were never called. */
+static void build_addr_cache(void)
+{
+    FILE *fp = popen(
+        "docker inspect --format "
+        "'{{.Name}} {{range $net, $cfg := .NetworkSettings.Networks}}{{$cfg.IPAddress}} {{end}}' "
+        "$(docker ps -q 2>/dev/null) 2>/dev/null", "r");
+    if (!fp)
+        return;
+
+    char line[256];
+    while (fgets(line, sizeof(line), fp)) {
+        char *saveptr = NULL;
+        char *tok = strtok_r(line, " \t\n", &saveptr);
+        if (!tok)
+            continue;
+        const char *name = (tok[0] == '/') ? tok + 1 : tok; /* docker inspect prefixes names with '/' */
+
+        while ((tok = strtok_r(NULL, " \t\n", &saveptr)) != NULL) {
+            if (addr_cache_count >= ADDR_CACHE_MAX)
+                break;
+            struct in_addr ip;
+            if (inet_pton(AF_INET, tok, &ip) != 1)
+                continue; /* not a valid IPv4 address (e.g. an unattached network's empty entry) */
+
+            addr_cache[addr_cache_count].addr = ip.s_addr;
+            snprintf(addr_cache[addr_cache_count].name, sizeof(addr_cache[addr_cache_count].name),
+                     "%s(%s)", name, tok);
+            addr_cache_count++;
+        }
+    }
+    pclose(fp);
+}
 
 static void resolve_addr(__u32 addr_be, char *out, size_t out_sz)
 {
+    if (!addr_cache_built) {
+        build_addr_cache();
+        addr_cache_built = true;
+    }
+
     for (int i = 0; i < addr_cache_count; i++) {
         if (addr_cache[i].addr == addr_be) {
             snprintf(out, out_sz, "%s", addr_cache[i].name);
@@ -141,29 +188,7 @@ static void resolve_addr(__u32 addr_be, char *out, size_t out_sz)
         }
     }
 
-    char numeric[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &addr_be, numeric, sizeof(numeric));
-
-    struct sockaddr_in sa = {0};
-    sa.sin_family      = AF_INET;
-    sa.sin_addr.s_addr = addr_be;
-
-    char host[NI_MAXHOST];
-    char resolved[80];
-    if (getnameinfo((struct sockaddr *)&sa, sizeof(sa), host, sizeof(host), NULL, 0, 0) == 0 &&
-        strcmp(host, numeric) != 0) {
-        /* Got back an actual name, not just the address echoed back. */
-        snprintf(resolved, sizeof(resolved), "%s(%s)", host, numeric);
-    } else {
-        snprintf(resolved, sizeof(resolved), "%s", numeric);
-    }
-
-    if (addr_cache_count < ADDR_CACHE_MAX) {
-        addr_cache[addr_cache_count].addr = addr_be;
-        snprintf(addr_cache[addr_cache_count].name, sizeof(addr_cache[addr_cache_count].name), "%s", resolved);
-        addr_cache_count++;
-    }
-    snprintf(out, out_sz, "%s", resolved);
+    inet_ntop(AF_INET, &addr_be, out, out_sz);
 }
 
 /* ── lightweight IP/TCP header decoder for XDP_EVT_OTHER's raw[] dump ───
