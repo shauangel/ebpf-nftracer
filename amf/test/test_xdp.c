@@ -1,3 +1,13 @@
+/* Must come before any #include: glibc hides POSIX/BSD extensions this
+ * file needs -- localtime_r() (POSIX.1-2001), getnameinfo()/NI_MAXHOST
+ * (RFC 3493) -- when compiled with a strict -std=c11 (see this
+ * directory's Makefile), unless a feature-test macro says otherwise.
+ * _GNU_SOURCE is the blanket "expose everything glibc has" macro; only
+ * matters on glibc (Darwin/macOS libc doesn't gate these the same way,
+ * which is why this didn't show up until built on the real Linux
+ * target). */
+#define _GNU_SOURCE
+
 /*
  * test_xdp.c — auto-attaching loader + detach watchdog for ../xdp_ngap.c.
  *
