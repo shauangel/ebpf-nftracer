@@ -1,0 +1,123 @@
+Handler entry points in internal/ where a request first arrives at AMF code
+AND its information elements (IEs) become visible as typed/decoded fields.
+
+Method: for each ingress interface, picked the single innermost chokepoint
+common to all messages on that interface (if one exists), instead of every
+function in the call chain. NGAP and NAS each funnel every message through
+one decode-then-dispatch function, so one entry each covers 100% of that
+interface's traffic. SBI has no such shared chokepoint -- each Namf_*/
+callback operation deserializes its own distinct request body -- so it is
+one entry per exposed HTTP operation.
+
+================================================================================
+N2 / NGAP  (gNB -> AMF, SCTP)
+================================================================================
+1 function covers 100% of NGAP traffic (all ~30 procedure codes).
+
+  ngap.dispatchMain
+  internal/ngap/dispatcher_generated.go:10
+  func dispatchMain(ran *context.AmfRan, message *ngapType.NGAPPDU)
+  -> `message` is the fully ASN.1-decoded NGAP PDU; every IE for whichever
+     procedure arrived (InitialUEMessage, UplinkNASTransport, HandoverRequired,
+     PDUSessionResourceSetupResponse, ...) is already populated as typed struct
+     fields at this point.
+
+================================================================================
+NAS  (UE -> AMF, carried inside NGAP NAS-PDU, or replayed via SBI N1MessageNotify)
+================================================================================
+1 function covers 100% of NAS traffic regardless of transport path.
+
+  nas.Dispatch
+  internal/nas/dispatch.go:15
+  func Dispatch(ue *context.AmfUe, accessType models.AccessType, procedureCode int64, msg *nas.Message) error
+  -> `msg.GmmMessage` is the deciphered, integrity-checked, fully decoded NAS
+     message (RegistrationRequest, AuthenticationResponse, SecurityModeComplete,
+     ...); this is downstream of nas_security.Decode so ciphering/MAC are
+     already stripped and every NAS IE is a typed field.
+
+================================================================================
+SBI  (other NFs -> AMF, HTTP/JSON: AUSF/UDM/PCF/SMF/NRF-callback + OAM)
+================================================================================
+No shared decode point exists -- each operation has its own request model, so
+these are the minimal 1:1 set (35 functions, one per exposed operation). Each
+does c.GetRawData() + openapi.Deserialize() into the named models.* struct
+immediately before calling into the processor package; that's where the IEs
+become visible.
+
+(X) = important to trace, per analysis/amf_state_machine.py. That graph
+models the registration FSM from the *new* AMF's point of view; almost all
+AUSF/UDM/PCF/SMF edges in it are outbound consumer calls whose responses come
+back as ordinary HTTP client responses (not through any SBI server handler
+below). The handlers marked (X) are the ones where another NF calls *into*
+this AMF asynchronously/as a peer, and so actually correspond to a state
+transition in that graph:
+  - HTTPUEContextTransfer         -> CONTEXT_LOOKUP <-> AMF edge (this is the
+    inbound side of "Namf ContextTransfer" when this instance is the OLD AMF)
+  - HTTPHandleDeregistrationNotification -> UDM->Old AMF deregistration
+    notify that drives old-AMF CLEANUP_REQUIRED (registration doc step 56)
+  - HTTPN1N2MessageTransfer       -> SMF pushing NAS/N2 into
+    SM_CONTEXT_PENDING -> INITIAL_CONTEXT_SETUP
+  - HTTPSmContextStatusNotify     -> SMF async status feeding
+    PDU_SESSION_REJECTED / cleanup
+  - HTTPCreateSubscription        -> PCF Namf_EventExpose_Subscribe during
+    POLICY_ASSOCIATING (registration doc step 62)
+  - HTTPAmPolicyControlUpdateNotifyUpdate/Terminate -> PCF pushing policy
+    changes that affect POLICY_ASSOCIATING / REGISTERED_CONNECTED
+The rest are real endpoints but aren't on a path any edge in that graph
+exercises, so hooking them adds volume without adding state-transition signal.
+
+  -- Namf_Communication (internal/sbi/api_communication.go) --
+  s.HTTPAMFStatusChangeSubscribeModify   :135
+  s.HTTPAMFStatusChangeUnSubscribe       :169
+  s.HTTPCreateUEContext                  :173
+  s.HTTPEBIAssignment                    :218
+  s.HTTPRegistrationStatusUpdate         :252
+  s.HTTPReleaseUEContext                 :286
+  s.HTTPUEContextTransfer                :320  (X)
+  s.HTTPRelocateUEContext                :362
+  s.HTTPCancelRelocateUEContext          :366
+  s.HTTPN1N2MessageUnSubscribe           :370
+  s.HTTPN1N2MessageTransfer              :374  (X)
+  s.HTTPN1N2MessageTransferStatus        :418
+  s.HTTPN1N2MessageSubscribe             :422
+  s.HTTPNonUeN2InfoUnSubscribe           :455
+  s.HTTPNonUeN2MessageTransfer           :460
+  s.HTTPNonUeN2InfoSubscribe             :465
+  s.HTTPAMFStatusChangeSubscribe         :470
+
+  -- Namf_EventExposure (internal/sbi/api_eventexposure.go) --
+  s.HTTPDeleteSubscription               :45
+  s.HTTPModifySubscription               :50
+  s.HTTPCreateSubscription               :83   (X)
+
+  -- Namf_Location (internal/sbi/api_location.go) --
+  s.HTTPProvideLocationInfo              :54
+  s.HTTPProvidePositioningInfo           :88
+  s.HTTPCancelLocation                   :93
+
+  -- HTTP callbacks from AUSF/PCF/UDM/SMF (internal/sbi/api_httpcallback.go) --
+  s.HTTPAmPolicyControlUpdateNotifyUpdate    :57   (X)
+  s.HTTPAmPolicyControlUpdateNotifyTerminate :90   (X)
+  s.HTTPN1MessageNotify                      :123
+  s.HTTPSmContextStatusNotify                :143  (X)
+  s.HTTPHandleDeregistrationNotification     :177  (X)
+
+  -- Namf_MBSCommunication (internal/sbi/api_mbscommunication.go) --
+  s.HTTPN2MessageTransfer                :27
+
+  -- Namf_MT (internal/sbi/api_mt.go) --
+  s.HTTPProvideDomainSelectionInfo       :42
+  s.HTTPEnableUeReachability             :46
+  s.HTTPEnableGroupReachability          :51
+
+  -- Namf_MBSBroadcast (internal/sbi/api_mbsbroadcast.go) --
+  s.HTTPContextCreate                    :39
+  s.HTTPContextUpdate                    :43
+  s.HTTPContextRelease                   :47
+
+  -- OAM (internal/sbi/api_oam.go) --
+  s.HTTPRegisteredUEContext              :42
+
+================================================================================
+Total: 2 (N2/NAS) + 35 (SBI) = 37 functions
+================================================================================

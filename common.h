@@ -14,6 +14,14 @@ struct attach_target {
 };
 
 /**
+ * find_nf - locate a running NF process by exact /proc/<pid>/comm match.
+ *
+ * Scans /proc for a process whose comm equals nf_name exactly.
+ * Returns the PID, or -1 if not found.
+ */
+int find_nf(const char *nf_name);
+
+/**
  * find_nf_exe - locate a running NF process by cmdline pattern.
  *
  * Scans /proc looking for a process whose cmdline contains one of:

@@ -382,16 +382,226 @@ static struct tcp_stream *find_or_create_stream(__u32 saddr, __u16 sport, __u32 
     return free_slot;
 }
 
+/* ── HPACK (RFC 7541) header-block decoding, for HEADERS/CONTINUATION ───
+ * Scope, deliberately: the STATIC table (Appendix A, 61 fixed name/value
+ * entries -- :method, :scheme, :status, common header names, ...) and
+ * PLAIN (non-Huffman) literal strings are fully, correctly decoded.
+ * Huffman-coded strings (Appendix B: a 256-entry canonical Huffman code)
+ * are NOT decoded -- that table can't be verified from here, and a
+ * transcription error would silently produce WRONG text rather than an
+ * honest "not decoded" marker, which is worse for something meant to be
+ * read as real data. Huffman-coded values print as "<huffman, N bytes>"
+ * instead. The DYNAMIC table (headers added by earlier HEADERS frames on
+ * the same connection) also isn't tracked -- those indices print as
+ * "<dynamic:N>". Every decode result here is either exactly right or
+ * explicitly marked as not decoded; nothing is guessed. */
+
+struct hpack_static_entry { const char *name; const char *value; };
+static const struct hpack_static_entry hpack_static_table[] = {
+    { ":authority", "" },
+    { ":method", "GET" },
+    { ":method", "POST" },
+    { ":path", "/" },
+    { ":path", "/index.html" },
+    { ":scheme", "http" },
+    { ":scheme", "https" },
+    { ":status", "200" },
+    { ":status", "204" },
+    { ":status", "206" },
+    { ":status", "304" },
+    { ":status", "400" },
+    { ":status", "404" },
+    { ":status", "500" },
+    { "accept-charset", "" },
+    { "accept-encoding", "gzip, deflate" },
+    { "accept-language", "" },
+    { "accept-ranges", "" },
+    { "accept", "" },
+    { "access-control-allow-origin", "" },
+    { "age", "" },
+    { "allow", "" },
+    { "authorization", "" },
+    { "cache-control", "" },
+    { "content-disposition", "" },
+    { "content-encoding", "" },
+    { "content-language", "" },
+    { "content-length", "" },
+    { "content-location", "" },
+    { "content-range", "" },
+    { "content-type", "" },
+    { "cookie", "" },
+    { "date", "" },
+    { "etag", "" },
+    { "expect", "" },
+    { "expires", "" },
+    { "from", "" },
+    { "host", "" },
+    { "if-match", "" },
+    { "if-modified-since", "" },
+    { "if-none-match", "" },
+    { "if-range", "" },
+    { "if-unmodified-since", "" },
+    { "last-modified", "" },
+    { "link", "" },
+    { "location", "" },
+    { "max-forwards", "" },
+    { "proxy-authenticate", "" },
+    { "proxy-authorization", "" },
+    { "range", "" },
+    { "referer", "" },
+    { "refresh", "" },
+    { "retry-after", "" },
+    { "server", "" },
+    { "set-cookie", "" },
+    { "strict-transport-security", "" },
+    { "transfer-encoding", "" },
+    { "user-agent", "" },
+    { "vary", "" },
+    { "via", "" },
+    { "www-authenticate", "" },
+};
+#define HPACK_STATIC_COUNT (sizeof(hpack_static_table) / sizeof(hpack_static_table[0]))
+
+/* Decodes an HPACK variable-length integer (RFC 7541 SS5.1) with an
+ * N-bit prefix starting at buf[*pos]; advances *pos past however many
+ * bytes it consumed. Returns the decoded value, or -1 on truncation/
+ * absurd length (guards against runaway continuation bytes on
+ * malformed/adversarial input). */
+static long hpack_decode_int(const __u8 *buf, __u32 len, __u32 *pos, int prefix_bits)
+{
+    if (*pos >= len)
+        return -1;
+    __u8 mask  = (__u8)((1 << prefix_bits) - 1);
+    __u8 first = buf[*pos] & mask;
+    (*pos)++;
+    if (first < mask)
+        return first;
+
+    unsigned long value = mask;
+    int shift = 0;
+    for (;;) {
+        if (*pos >= len || shift > 28)
+            return -1;
+        __u8 b = buf[(*pos)++];
+        value += (unsigned long)(b & 0x7F) << shift;
+        if (!(b & 0x80))
+            break;
+        shift += 7;
+    }
+    return (long)value;
+}
+
+/* Reads an HPACK string literal (RFC 7541 SS5.2) at buf[*pos] into out[]
+ * (NUL-terminated, truncated to out_sz if needed), advancing *pos past
+ * it either way. Huffman-coded strings (the length prefix's high bit)
+ * are NOT decoded -- see the scope note above -- out gets a
+ * "<huffman, N bytes>" placeholder instead, but *pos still advances
+ * correctly past the raw encoded bytes so parsing the REST of the
+ * header block stays aligned. Returns 0 on success, -1 if the buffer
+ * runs out mid-string (truncated capture, malformed input, ...). */
+static int hpack_read_string(const __u8 *buf, __u32 len, __u32 *pos, char *out, size_t out_sz)
+{
+    if (*pos >= len)
+        return -1;
+    int huffman = (buf[*pos] & 0x80) != 0;
+    long slen = hpack_decode_int(buf, len, pos, 7);
+    if (slen < 0 || *pos + (__u32)slen > len)
+        return -1;
+
+    if (huffman) {
+        snprintf(out, out_sz, "<huffman, %ld byte(s)>", slen);
+    } else {
+        size_t n = ((size_t)slen < out_sz - 1) ? (size_t)slen : out_sz - 1;
+        memcpy(out, buf + *pos, n);
+        out[n] = '\0';
+    }
+    *pos += (__u32)slen;
+    return 0;
+}
+
+static void hpack_static_lookup(long index, const char **name, const char **value)
+{
+    if (index >= 1 && (size_t)index <= HPACK_STATIC_COUNT) {
+        *name  = hpack_static_table[index - 1].name;
+        *value = hpack_static_table[index - 1].value;
+    } else {
+        *name  = NULL;
+        *value = NULL;
+    }
+}
+
+/* Decodes and prints every header field in an HPACK header-block
+ * fragment buf[0..len) -- the payload of a HEADERS/CONTINUATION frame
+ * with any PADDED/PRIORITY preamble already stripped by the caller (see
+ * drain_h2_frames()). Dispatches on the field-type bits per RFC 7541
+ * SS6: Indexed Header Field (0x80), Literal with Incremental Indexing
+ * (0x40), Dynamic Table Size Update (0x20), Literal Never Indexed
+ * (0x10), Literal without Indexing (else). Stops early on any malformed/
+ * truncated field rather than risk misparsing the rest of the block. */
+static void hpack_decode_block(const __u8 *buf, __u32 len)
+{
+    __u32 pos = 0;
+    while (pos < len) {
+        __u8 b = buf[pos];
+        char name_buf[128], value_buf[192];
+        const char *name, *value;
+
+        if (b & 0x80) {
+            /* Indexed Header Field -- name AND value both come from the table. */
+            long index = hpack_decode_int(buf, len, &pos, 7);
+            if (index <= 0)
+                break;
+            if (index <= (long)HPACK_STATIC_COUNT) {
+                hpack_static_lookup(index, &name, &value);
+            } else {
+                snprintf(name_buf, sizeof(name_buf), "<dynamic:%ld>", index);
+                name = name_buf;
+                value = "";
+            }
+            printf("      %s: %s\n", name ? name : "?", value ? value : "");
+            continue;
+        }
+
+        int prefix_bits;
+        int is_size_update = 0;
+        if (b & 0x40)        prefix_bits = 6; /* Literal w/ Incremental Indexing */
+        else if (b & 0x20) { prefix_bits = 5; is_size_update = 1; } /* Dynamic Table Size Update */
+        else                 prefix_bits = 4; /* Literal Never Indexed, or without Indexing -- same shape either way */
+
+        long index = hpack_decode_int(buf, len, &pos, prefix_bits);
+        if (index < 0)
+            break;
+        if (is_size_update)
+            continue; /* no header field here -- just consumed a table-size hint */
+
+        if (index == 0) {
+            if (hpack_read_string(buf, len, &pos, name_buf, sizeof(name_buf)) < 0)
+                break;
+            name = name_buf;
+        } else if (index <= (long)HPACK_STATIC_COUNT) {
+            const char *unused_value;
+            hpack_static_lookup(index, &name, &unused_value); /* only the NAME comes from the table here -- the value is always a literal that follows */
+        } else {
+            snprintf(name_buf, sizeof(name_buf), "<dynamic:%ld>", index);
+            name = name_buf;
+        }
+
+        if (hpack_read_string(buf, len, &pos, value_buf, sizeof(value_buf)) < 0)
+            break;
+        value = value_buf;
+
+        printf("      %s: %s\n", name ? name : "?", value);
+    }
+}
+
 /* ── HTTP/2 frame decoder, drained from a reassembled stream buffer ───
  * Decodes as many COMPLETE frames as are fully present at the front of
  * the buffer (a frame's own 3-byte length field is exactly what makes
  * "complete" checkable), prints each, then compacts the buffer -- drops
  * the consumed bytes, keeps any trailing partial frame for next time.
- * HEADERS/CONTINUATION payloads are HPACK-compressed (RFC 7541) and
- * deliberately NOT decoded here -- a real HPACK decoder (dynamic table,
- * Huffman coding) is a lot more than "lightweight"; this just labels
- * them and moves on. DATA frames are printed as readable characters
- * (SBI bodies are JSON, so this is usually actually readable). */
+ * HEADERS/CONTINUATION payloads go through hpack_decode_block() above.
+ * DATA frames are printed as readable characters (SBI bodies are JSON,
+ * so this is usually actually readable). */
 
 static const char *h2_frame_type_name(__u8 type)
 {
@@ -436,7 +646,35 @@ static void drain_h2_frames(struct tcp_stream *s, const char *src_name, const ch
             text[n] = '\0';
             printf("      data: \"%s\"%s\n", text, (len > n) ? " (truncated)" : "");
         } else if (type == 1 || type == 9) { /* HEADERS / CONTINUATION */
-            printf("      (HPACK-compressed header block, %u byte(s) -- not decoded)\n", len);
+            const __u8 *block = payload;
+            __u32 block_len = len;
+            int ok = 1;
+
+            if (type == 1) {
+                /* Only HEADERS (never CONTINUATION) can carry a PADDED
+                 * length byte and/or a PRIORITY preamble (RFC 7540
+                 * SS6.2) before the actual HPACK block starts. */
+                __u32 preamble = 0;
+                __u32 pad_len = 0;
+                if (flags & 0x08) { /* PADDED */
+                    if (block_len < 1) ok = 0;
+                    else { pad_len = block[0]; preamble += 1; }
+                }
+                if (ok && (flags & 0x20)) /* PRIORITY: Exclusive(1 bit)+StreamDependency(31 bits)+Weight(8 bits) */
+                    preamble += 5;
+                if (ok && preamble + pad_len <= block_len) {
+                    block += preamble;
+                    block_len -= (preamble + pad_len);
+                } else {
+                    ok = 0;
+                }
+            }
+
+            if (ok) {
+                hpack_decode_block(block, block_len);
+            } else {
+                printf("      (HEADERS padding/priority fields malformed or cut off -- skipping HPACK decode)\n");
+            }
         } else if (type == 6 && len == 8) { /* PING */
             printf("      opaque: %02x%02x%02x%02x%02x%02x%02x%02x%s\n",
                    payload[0], payload[1], payload[2], payload[3],

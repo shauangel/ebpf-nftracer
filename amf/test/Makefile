@@ -24,6 +24,12 @@
 #                        ever detached/replaced/the interface disappears.
 #                        Long-running (Ctrl+C to stop) -- NOT part of
 #                        `make test`'s pass/fail loop, see WATCH_BINS.
+#   test_func_load      - loader for ../amf_func_load.bpf.c: waits for an
+#                        "amf" process, attaches every uprobe in
+#                        ../amf_func_hooks.c (ngap/nas/sbi_hook_funcs[]),
+#                        and prints every decoded event from the "events"
+#                        ringbuf. Long-running (Ctrl+C to stop) -- also in
+#                        WATCH_BINS, not `make test`'s pass/fail loop.
 
 CC       := cc
 CFLAGS   := -std=c11 -Wall -Wextra -Wno-unused-parameter
@@ -34,7 +40,7 @@ ARCH       := $(shell uname -m | sed 's/x86_64/x86/')
 BPF_CFLAGS := -O2 -g -target bpf -D__TARGET_ARCH_$(ARCH)
 
 BINS       := test_map_create test_map_walk sm_use_case
-WATCH_BINS := test_xdp
+WATCH_BINS := test_xdp test_func_load
 
 SM_USE_CASE_PINS := /sys/fs/bpf/sm_use_case_nodes /sys/fs/bpf/sm_use_case_edges
 
@@ -80,8 +86,34 @@ xdp_ngap.bpf.o: ../xdp_ngap.c ../xdp_ngap_event.h ../../vmlinux.h
 test_xdp: test_xdp.c ../xdp_ngap_event.h xdp_ngap.bpf.o
 	$(CC) $(CFLAGS) test_xdp.c -o $@ $(LIBS)
 
+# test_func_load: loader for ../amf_func_load.bpf.c. Like test_xdp above,
+# the BPF object is loaded at runtime (bpf_object__open_file()), not
+# linked in -- amf_func_load.bpf.o is a prerequisite so `make` builds it,
+# not something test_func_load itself is compiled against. common.o and
+# amf_func_hooks.o ARE linked in: find_nf() (common.c) and the
+# ngap/nas/sbi_hook_funcs[] attach_target arrays (amf_func_hooks.c) are
+# plain userspace C, needed at build time, not runtime-resolved.
+# -D_GNU_SOURCE: common.c uses opendir()/readdir() (POSIX, <dirent.h>)
+# with no feature-test macro of its own -- harmless under plain -Wall
+# (../../Makefile's dialect, gnu17, exposes POSIX by default) but this
+# suite's -std=c11 puts glibc in strict-ANSI mode, which hides them
+# without this. Same category of issue as the _GNU_SOURCE comment at the
+# top of test_xdp.c, just supplied via flag here instead of editing
+# common.c (shared by every NF's loader, not just amf's).
+common.o: ../../common.c ../../common.h
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -c ../../common.c -o $@
+
+amf_func_hooks.o: ../amf_func_hooks.c ../../common.h
+	$(CC) $(CFLAGS) -c ../amf_func_hooks.c -o $@
+
+amf_func_load.bpf.o: ../amf_func_load.bpf.c ../amf_func_load_events.h ../../vmlinux.h
+	$(CLANG) $(BPF_CFLAGS) -I../.. -c ../amf_func_load.bpf.c -o $@
+
+test_func_load: test_func_load.c ../amf_func_load_events.h ../../common.h amf_func_hooks.o common.o amf_func_load.bpf.o
+	$(CC) $(CFLAGS) test_func_load.c amf_func_hooks.o common.o -o $@ $(LIBS)
+
 clean:
-	rm -f $(BINS) $(WATCH_BINS) xdp_ngap.bpf.o
+	rm -f $(BINS) $(WATCH_BINS) xdp_ngap.bpf.o amf_func_load.bpf.o amf_func_hooks.o common.o
 
 # sm_use_case deliberately leaves its maps pinned at bpffs after running
 # (see its file header comment) so they can be inspected with `bpftool
