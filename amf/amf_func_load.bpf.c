@@ -670,17 +670,22 @@ struct find_key_ctx {
  * means its own small #pragma-unrolled inner key-compare loop (bounded by
  * IE_KEY_MAX, not IE_SCAN_MAX) is verified exactly once, not 13 times.
  *
- * c->body is read via bpf_probe_read_kernel(), NOT direct indexing
- * (c->body[...]), even though it's kernel/ringbuf memory this program owns
- * outright: the verifier's callback-boundary type tracking doesn't carry
- * the original PTR_TO_MEM bound on `body` through the round trip into
- * find_key_ctx and back out through bpf_loop()'s generic `void *ctx` --
- * direct indexing here fails load with "R7 unbounded memory access, make
- * sure to bounds check any such access" even though every index is
- * provably in range. bpf_probe_read_kernel() sidesteps that: like
- * bpf_probe_read_user() used everywhere else in this file for pointers
- * the verifier can't statically bound (arbitrary Go heap addresses), it
- * does its own runtime-safe check instead of demanding static proof. */
+ * Both c->body AND c->key are read via bpf_probe_read_kernel(), never
+ * direct indexing (c->body[...] / c->key[...]) -- even though both point
+ * at memory this program legitimately owns (ringbuf-reserved body, .rodata
+ * key literal), the verifier's callback-boundary type tracking doesn't
+ * carry a pointer's original PTR_TO_MEM bound through the round trip into
+ * find_key_ctx and back out through bpf_loop()'s generic `void *ctx`.
+ * Direct indexing of EITHER one fails load the same way -- first
+ * "R7 unbounded memory access" for body, then the identical complaint on a
+ * different register for key once body's read was fixed -- even though
+ * every index is provably in range. bpf_probe_read_kernel() sidesteps
+ * that for both: like bpf_probe_read_user() used everywhere else in this
+ * file for pointers the verifier can't statically bound (arbitrary Go
+ * heap addresses), it does its own runtime-safe check instead of
+ * demanding static proof. key_buf can read a few bytes past the real key
+ * literal for a short key (e.g. "\"cause\":" is 8 bytes, IE_KEY_MAX is 14)
+ * -- harmless, since the compare loop below never looks past key_len. */
 static long find_key_cb(__u32 i, void *ctx)
 {
 	struct find_key_ctx *c = ctx;
@@ -689,9 +694,12 @@ static long find_key_cb(__u32 i, void *ctx)
 		return 1; /* stop -- past the scan window, or past the body itself */
 
 	__u8 window[IE_KEY_MAX];
+	__u8 key_buf[IE_KEY_MAX];
 
 	if (bpf_probe_read_kernel(window, IE_KEY_MAX, c->body + i))
 		return 1; /* unreadable at this offset -- stop rather than compare garbage */
+	if (bpf_probe_read_kernel(key_buf, IE_KEY_MAX, c->key))
+		return 1;
 
 	__u8 match = 1;
 
@@ -699,7 +707,7 @@ static long find_key_cb(__u32 i, void *ctx)
 	for (__u32 j = 0; j < IE_KEY_MAX; j++) {
 		if (j >= c->key_len)
 			break;
-		if (window[j] != (__u8)c->key[j]) {
+		if (window[j] != key_buf[j]) {
 			match = 0;
 			break;
 		}
