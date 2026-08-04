@@ -638,42 +638,81 @@ int amf_sbi_dereg(struct pt_regs *ctx)
  * ---------------------------------------------------------------------------
  */
 
-#define IE_SCAN_MAX 160  /* bytes of body scanned for each key; every top-level
+#define IE_SCAN_MAX 256  /* bytes of body scanned for each key; every top-level
 			  * key used below appears well inside this window in
-			  * every example body in observe.md. Deliberately kept
-			  * small -- #pragma unroll fully unrolls both this loop
-			  * and the inner key-compare loop below, so this bound
-			  * directly drives generated code size/verifier load. */
+			  * every example body in observe.md. */
 #define IE_KEY_MAX  17   /* longest key literal below ("resourceStatus":, "n1MessageClass":), incl. quotes/colon */
 /* IE_STR_MAX: amf_func_load_events.h (it's part of event_sbi_body's layout) */
+
+struct find_key_ctx {
+	const __u8 *body;
+	__u32 body_len;
+	const char *key;
+	__u32 key_len;
+	int found_pos; /* -1 until found_key_cb sets it */
+};
+
+/*
+ * bpf_loop() callback for json_find_key() below. This used to be a
+ * #pragma-unrolled `for (i = 0; i < IE_SCAN_MAX; i++)` loop with a nested
+ * #pragma-unrolled key-compare loop inside it -- fully unrolled, that's
+ * IE_SCAN_MAX * IE_KEY_MAX static branch instructions PER CALL SITE, and
+ * sbi_parse_ies() below calls json_find_key() with 13 different keys, so
+ * the whole thing multiplied out to tens of thousands of branches once
+ * inlined into one probe. The kernel verifier rejected the result outright
+ * ("The sequence of 8193 jumps is too complex") -- BPF_COMPLEXITY_LIMIT_
+ * JMP_SEQ is a hard cap on path/branch complexity, independent of (and much
+ * stricter than) the raw 1M-instruction limit.
+ *
+ * bpf_loop() (kernel >= 5.17) fixes this the standard way: the outer scan
+ * becomes a genuine bounded RUNTIME loop around a single verified callback
+ * subprogram, instead of IE_SCAN_MAX copies of the loop body baked into the
+ * instruction stream. find_key_cb is deliberately NOT __always_inline --
+ * bpf_loop() needs a real, single, callable BPF subprogram, and having only
+ * one (parameterized via find_key_ctx, not per-key template expansion)
+ * means its own small #pragma-unrolled inner key-compare loop (bounded by
+ * IE_KEY_MAX, not IE_SCAN_MAX) is verified exactly once, not 13 times.
+ */
+static long find_key_cb(__u32 i, void *ctx)
+{
+	struct find_key_ctx *c = ctx;
+
+	if (i >= IE_SCAN_MAX || i + c->key_len > c->body_len)
+		return 1; /* stop -- past the scan window, or past the body itself */
+
+	__u8 match = 1;
+
+#pragma unroll
+	for (__u32 j = 0; j < IE_KEY_MAX; j++) {
+		if (j >= c->key_len)
+			break;
+		if (c->body[i + j] != (__u8)c->key[j]) {
+			match = 0;
+			break;
+		}
+	}
+	if (match) {
+		c->found_pos = (int)(i + c->key_len);
+		return 1; /* stop -- found it */
+	}
+	return 0; /* keep scanning */
+}
 
 /* Returns the body offset right after a literal match of `key` (which should
  * include the surrounding quotes and trailing colon, e.g. "\"reason\":"), or
  * -1 if not found within the first IE_SCAN_MAX bytes of body. */
 static __always_inline int json_find_key(const __u8 *body, __u32 body_len, const char *key, __u32 key_len)
 {
-	__u32 scan_len = body_len < IE_SCAN_MAX ? body_len : IE_SCAN_MAX;
+	struct find_key_ctx ctx = {
+		.body = body,
+		.body_len = body_len,
+		.key = key,
+		.key_len = key_len,
+		.found_pos = -1,
+	};
 
-#pragma unroll
-	for (__u32 i = 0; i < IE_SCAN_MAX; i++) {
-		if (i >= scan_len || i + key_len > body_len)
-			break;
-
-		__u8 match = 1;
-
-#pragma unroll
-		for (__u32 j = 0; j < IE_KEY_MAX; j++) {
-			if (j >= key_len)
-				break;
-			if (body[i + j] != (__u8)key[j]) {
-				match = 0;
-				break;
-			}
-		}
-		if (match)
-			return (int)(i + key_len);
-	}
-	return -1;
+	bpf_loop(IE_SCAN_MAX, find_key_cb, &ctx, 0);
+	return ctx.found_pos;
 }
 
 /* Copies a JSON string value ("...") starting at/after `pos` (which may point
