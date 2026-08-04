@@ -11,6 +11,71 @@ each route. Source: `github.com/free5gc/openapi@v1.2.5-.../models`.
 
 ---
 
+## What `amf_func_load.bpf.c` does, program by program
+
+12 BPF programs (`SEC("uprobe")`/`SEC("uretprobe")` functions), each a
+uprobe/uretprobe on a Go symbol in the running AMF binary — attached per
+`amf_func_hooks.c`'s `ngap_hook_funcs[]` / `nas_hook_funcs[]` /
+`sbi_hook_funcs[]`. All 12 share one ring buffer (`events`,
+`BPF_MAP_TYPE_RINGBUF`) and tag every record they emit with a `probe_id`
+(`enum amf_probe_id`, `amf_func_load_events.h`) so a userspace consumer can
+tell which program — and therefore which `struct event_*` shape — a given
+ringbuf record is. Every program also runs `ZERO_EVENT(e)` on its reserved
+ringbuf slot before filling it in, since `bpf_ringbuf_reserve()` hands back
+raw (possibly stale) memory, not zeroed memory — see that macro's own
+comment block for why it isn't a plain `memset()`.
+
+### 1. `amf_ngap_disp` — NGAP dispatch
+
+- **Hooks**: `github.com/free5gc/amf/internal/ngap.dispatchMain(ran *context.AmfRan, message *ngapType.NGAPPDU)`, uprobe (entry).
+- **Reads**: `GO_ARG1`/`GO_ARG2` = `ran`/`message` pointers. Reads `message.Present` (offset 0) to find which of `InitiatingMessage`/`SuccessfulOutcome`/`UnsuccessfulOutcome` (offsets 8/16/24) is populated, then that sub-message's `ProcedureCode` (helper `ngap_submsg_ptr()`). If it's an `InitiatingMessage` carrying `InitialUEMessage` or `UplinkNASTransport` (procedure codes 15/46), `ngap_copy_embedded_nas_pdu()` walks the ASN.1 protocol-IE list (hand-derived offsets, bounded to `MAX_IE_SCAN`=12 IEs) to find and copy out the embedded NAS-PDU octet string.
+- **Emits**: `event_ngap` (`PROBE_NGAP_DISPATCH`) — `ran_ptr`, `present`, `procedure_code`, `nas_pdu`/`nas_pdu_len`.
+- **Why**: `dispatchMain` is the single chokepoint 100% of NGAP traffic funnels through (all ~30 procedure codes) — `procedure_code` is the baseline signal for sequencing/handover-bypass correlation (CVE-2026-42081/42082), and the embedded NAS-PDU is handed off for the NAS-side analysis below regardless of which NGAP procedure carried it.
+
+### 2. `amf_nas_disp` — NAS dispatch
+
+- **Hooks**: `github.com/free5gc/amf/internal/nas.Dispatch(ue *context.AmfUe, accessType models.AccessType, procedureCode int64, msg *nas.Message) error`, uprobe (entry).
+- **Reads**: `GO_ARG1..5` = `ue` pointer, `accessType` string `{ptr,len}`, `procedureCode`, `msg` pointer. Copies `accessType`. Reads `msg.GmmMessage` (offset 8) then `GmmHeader.Octet[2]` (offset 2) — the NAS `MessageType` byte, a single-byte discriminator that covers all ~60 possible NAS messages without needing each one's own field layout.
+- **Emits**: `event_nas` (`PROBE_NAS_DISPATCH`) — `ue_ptr`, `procedure_code`, `message_type`, `access_type`.
+- **Why**: `Dispatch` is the single chokepoint for 100% of NAS traffic regardless of transport (N2-carried or SBI-replayed). `message_type` + `procedure_code` are exactly what's needed to validate state-transition legality per-UE — the core signal for every CoreCrisis finding (P1–P3, D1–D7 in [amf_related_attacks.md](amf_related_attacks.md)), all of which are illegal/out-of-order message-type or security-header-type transitions.
+
+### 3–9. The 7 SBI entry probes
+
+`amf_sbi_ue_xfer`, `amf_sbi_n1n2`, `amf_sbi_sub_crt`, `amf_sbi_pol_upd`,
+`amf_sbi_pol_trm`, `amf_sbi_sm_ntfy`, `amf_sbi_dereg` — each is a one-line
+wrapper around the shared helper `emit_sbi_event()`, differing only in
+which `HTTPXxx` Go method it's attached to and which `probe_id` it passes.
+
+- **Hooks**: `func (s *Server) HTTPXxx(c *gin.Context)`, uprobe (entry), for the 7 handlers marked `(X)` in [handler_list.txt](handler_list.txt).
+- **Reads** (`emit_sbi_event()`): `GO_ARG2` = `*gin.Context` (`GO_ARG1` is the `*Server` receiver). From it: `Request` pointer (offset 32) → `Method` string (offset 0) and `URL` pointer (offset 16) → `Path` string (offset 56); and the `Params` slice (offset 56) → up to 2 `gin.Param{Key,Value}` pairs.
+- **Emits**: `event_sbi` (one of `PROBE_SBI_UE_CTX_XFER` … `PROBE_SBI_DEREG_NOTIFY`) — `method`, `path`, `param0_key`/`param0_val`, `param1_key`/`param1_val`.
+- **Why**: at handler *entry* the JSON body hasn't been deserialized yet (see `amf_sbi_body` below), but gin's router has already populated the URL and any `:params` — and for 6 of the 7, that path param *is* the operation's primary identifying IE straight from the route table:
+  - `amf_sbi_ue_xfer` — CONTEXT_LOOKUP edge, `param0`=`ueContextId`
+  - `amf_sbi_n1n2` — SM_CONTEXT_PENDING→INITIAL_CONTEXT_SETUP, `param0`=`ueContextId`
+  - `amf_sbi_sub_crt` — POLICY_ASSOCIATING subscribe, no path param (body-only IEs — see `amf_sbi_body`)
+  - `amf_sbi_pol_upd` / `amf_sbi_pol_trm` — policy update/termination, `param0`=`polAssoId`
+  - `amf_sbi_sm_ntfy` — `param0`=`supi`, `param1`=`pduSessionId`
+  - `amf_sbi_dereg` — drives CLEANUP_REQUIRED, `param0`=`ueid`
+
+### 10. `amf_sbi_body` — raw SBI body + parsed IEs
+
+- **Hooks**: `github.com/gin-gonic/gin.(*Context).GetRawData() ([]byte, error)`, **uretprobe** (fires at return) — the one shared chokepoint all ~35 SBI handlers' body reads funnel through, not just the 7 above.
+- **Reads**: `GO_RET1..4` = data ptr/len/cap/error-itab; bails on a non-nil error. Copies up to `SBI_BODY_MAX`(1024) bytes of the raw JSON body. Then `sbi_parse_ies()` runs a bounded byte-literal scan (explicitly *not* a JSON parser) over the first `IE_SCAN_MAX`(256) bytes, looping over 5 fixed keys (`sbi_ie_keys[]`: `reason`, `accessType`, `cause`, `deregReason`, `nfId`) and copying out whichever are present.
+  - The key search (`json_find_key()`/`find_key_cb()`) runs via `bpf_loop()` rather than a fully-unrolled loop — an earlier fully-unrolled version (13 keys × a full-window scan each) blew the verifier's jump-complexity limit ("The sequence of 8193 jumps is too complex"). Inside the callback, both the body window and the key literal are read with `bpf_probe_read_kernel()` rather than direct indexing, since the verifier doesn't carry a pointer's bound through the round trip into `bpf_loop()`'s callback `ctx`, even for memory the program legitimately owns.
+- **Emits**: `event_sbi_body` (`PROBE_SBI_RAW_BODY`) — raw `body`/`body_len`, plus `reason`/`access_type`/`cause`/`dereg_reason`/`nf_id` (empty string = key not found).
+- **Why**: this is where the actual wire-format IEs live — see the per-handler JSON schemas below; `gin.Context` at `HTTPXxx` entry never exposes them (the handler hasn't called `GetRawData()`/`Deserialize()` yet). Since it's one shared chokepoint for all ~35 SBI operations, a userspace consumer correlates a captured body back to its handler using the nearest-in-time `amf_sbi_*` entry-probe event (method + path) — see the [cross-reference table](#cross-reference-to-the-ebpf-capture) and [Parsed IE fields](#parsed-ie-fields-event_sbi_body-in-kernel-best-effort-json-scan) below for the full detail on both.
+
+### 11–12. `amf_http_hdr_get_entry` / `amf_http_hdr_get_ret` — Authorization header capture
+
+- **Hooks**: `net/http.Header.Get(key string) string` — **a pair** of probes (uprobe + uretprobe) on the *same* symbol, the stdlib chokepoint gin's `c.GetHeader()` / `c.Request.Header.Get()` bottom out through for every header lookup in the binary.
+- **`amf_http_hdr_get_entry`** (uprobe): reads `GO_ARG2`/`GO_ARG3` = the `key` string `{ptr,len}`; bails immediately unless its length matches `"Authorization"`'s, then byte-compares the content. On a match, records the calling thread's `pid_tgid` in a small hash map (`authz_probe_inflight`) to arm the return-side probe.
+- **`amf_http_hdr_get_ret`** (uretprobe): checks whether this thread is armed (looks itself up in, and removes itself from, `authz_probe_inflight`); if so, reads `GO_RET1`/`GO_RET2` = the returned string and copies up to `AUTHZ_VAL_MAX`(512) bytes.
+- **Emits**: `event_sbi_authz` (`PROBE_SBI_AUTHZ_HDR`) — the raw `Bearer <jwt>` string.
+- **Why**: the AMF-side tap for the top cross-cutting SBI finding in [amf_related_attacks.md](amf_related_attacks.md#included-with-caveats) — free5GC's `VerifyOAuth` silently accepts a token once it parses as a syntactically valid JWT, even if scope verification itself fails, so a token minted for one NF is accepted on every other NF's endpoints. A userspace consumer decodes the JWT `scope`/`iss` claims out-of-band and cross-checks them against the operation actually being called (`nf_id` from `amf_sbi_body`, method/path from the `amf_sbi_*` entry probes), correlating by nearest-in-time `pid` the same way raw bodies are.
+- Entry/return correlation via a map (rather than the timestamp-based correlation `amf_sbi_body` needs) is safe here specifically because `Header.Get` does no blocking I/O, so entry and return always execute on the same OS thread — unlike `GetRawData()`, which can resume on a different thread after its blocking read.
+
+---
+
 ## 1. HTTPUEContextTransfer
 
 - **Route**: `POST /namf-comm/v1/ue-contexts/:ueContextId/transfer`
