@@ -359,26 +359,27 @@ Cross-referenced against [amf_related_attacks.md](amf_related_attacks.md)'s
 "Information Elements to Observe for Detection" / SBI table.
 `amf_sbi_body` no longer just copies the raw body — it also runs a bounded,
 key-literal byte scan (`sbi_parse_ies()` in `amf_func_load.bpf.c`) over the
-first 160 bytes (`IE_SCAN_MAX`) and fills these fields whenever the
-corresponding JSON key is present (empty string / `has_pdu_session_id == 0` means "not found", not
-"empty value"):
+first 256 bytes (`IE_SCAN_MAX`) for a deliberately narrow set of 5 keys
+(`sbi_ie_keys[]`, looped over rather than one hand-written call site per
+key) and fills these fields whenever the corresponding JSON key is present
+(empty string means "not found", not "empty value"):
 
-| `event_sbi_body` field | JSON key(s) | Source model.field | Relevant finding |
+| `event_sbi_body` field | JSON key | Source model.field | Relevant finding |
 |---|---|---|---|
 | `reason` | `reason` | `UeContextTransferReqData.Reason` | distinguishes INIT_REG vs MOBI_REG at the CONTEXT_LOOKUP edge |
-| `access_type` | `accessType` / `anType` / `targetAccess` | `*.AccessType`, `StatusInfo.AnType`, `N1N2MessageTransferReqData.TargetAccess` | cross-checked against NAS-side access type for spoofed-transport detection |
-| `n1_message_class` | `n1MessageClass` | `N1MessageContainer.N1MessageClass` | flags non-5GMM N1 classes riding the same transfer path |
-| `pdu_session_id` / `has_pdu_session_id` | `pduSessionId` | `N1N2MessageTransferReqData.PduSessionId` | ties an N1/N2 push back to a specific PDU session for the per-UE state machine |
-| `resource_status` | `resourceStatus` | `StatusInfo.ResourceStatus` | SmContextStatusNotify → PDU_SESSION_REJECTED/cleanup edge |
+| `access_type` | `accessType` | `*.AccessType` | cross-checked against NAS-side access type for spoofed-transport detection |
 | `cause` | `cause` | `StatusInfo.Cause`, `PcfAmPolicyControlTerminationNotification.Cause` | release/termination reason (shared key name across two handlers, harmless overlap) |
 | `dereg_reason` | `deregReason` | `DeregistrationData.DeregReason` | drives old-AMF CLEANUP_REQUIRED |
-| `trigger0` | `triggers[0]` | `PcfAmPolicyControlPolicyUpdate.Triggers` | first policy-update trigger (e.g. `SERV_AREA_CH`) |
-| `supi` | `supi` | `AmfEventSubscription.Supi` | subscription target UE |
 | `nf_id` | `nfId` | `AmfEventSubscription.NfId` | requester NF instance — correlate against the Authorization capture below for the cross-service scope-bypass finding |
-| `event_type0` | `eventList[0].type` | `AmfEvent.Type` | first subscribed event type (ambiguous if an earlier `"type"` key exists elsewhere in the body — best effort) |
+
+An earlier version of this also captured `n1MessageClass`, `pduSessionId`,
+`resourceStatus`, `triggers[0]`, `supi`, and `eventList[0].type` — trimmed
+back to these 5 to keep `sbi_parse_ies()` a simple loop instead of one
+call site per key; add a row to `sbi_ie_keys[]`/`event_sbi_body` if one of
+those becomes load-bearing again.
 
 This is a byte-literal scan, not a JSON parser: no nesting/escaping
-awareness, first textual match wins within the 160-byte window (every key
+awareness, first textual match wins within the 256-byte window (every key
 above is a top-level, early-declared field, so it lands inside that window
 in each example body even when the full body runs longer). It is meant
 to surface the specific IEs the attack analysis calls out cheaply, in-kernel

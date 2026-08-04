@@ -91,21 +91,15 @@ struct event_sbi_body {
 	__u32 body_len;
 	__u8  body[SBI_BODY_MAX];
 
-	/* best-effort parsed IEs -- see the sbi_parse_ies() comment block in
-	 * amf_func_load.bpf.c; zero-length string / has_pdu_session_id==0
-	 * means the key was not found. */
+	/* best-effort parsed IEs -- see sbi_ie_keys[]/sbi_parse_ies() in
+	 * amf_func_load.bpf.c; zero-length string means the key was not
+	 * found. Deliberately just these 5 -- see the comment above
+	 * IE_SCAN_MAX there for what each maps to and why. */
 	char  reason[IE_STR_MAX];
 	char  access_type[IE_STR_MAX];
-	char  n1_message_class[IE_STR_MAX];
-	__s32 pdu_session_id;
-	__u8  has_pdu_session_id;
-	char  resource_status[IE_STR_MAX];
 	char  cause[IE_STR_MAX];
 	char  dereg_reason[IE_STR_MAX];
-	char  trigger0[IE_STR_MAX];
-	char  supi[IE_STR_MAX];
 	char  nf_id[IE_STR_MAX];
-	char  event_type0[IE_STR_MAX];
 };
 
 /* ── SBI: Authorization header capture ───────────────────────────────── */

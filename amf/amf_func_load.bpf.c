@@ -601,47 +601,44 @@ int amf_sbi_dereg(struct pt_regs *ctx)
  *
  * amf_sbi_body has no per-endpoint identity (see the comment on the probe
  * below), so rather than deserializing a specific Go struct per handler this
- * scans the raw JSON text once for a fixed set of high-signal keys that are
- * each unique to (or unambiguous enough across) the 7 request bodies in
- * observe.md and copies out whichever are present:
+ * scans the raw JSON text once for a small, deliberately narrow set of
+ * high-signal keys and copies out whichever are present. Trimmed to 5 keys
+ * (down from an earlier, broader 13-key version) to keep sbi_parse_ies()
+ * itself simple -- a real `for` loop over sbi_ie_keys[] below, not one
+ * hand-written call site per key:
  *
- *   "reason"          UeContextTransferReqData.Reason           (INIT_REG / MOBI_REG / MOBI_REG_UE_VALIDATED
- *                                                                 -- registration vs mobility handoff, CONTEXT_LOOKUP edge)
- *   "accessType"/      *.AccessType / StatusInfo.AnType /
- *   "anType"/           N1N2MessageTransferReqData.TargetAccess  (3GPP_ACCESS vs NON_3GPP_ACCESS)
- *   "targetAccess"
- *   "n1MessageClass"   N1MessageContainer.N1MessageClass         (5GMM/SM/LPP/SMS/UPDP/LCS -- what kind of NAS payload is riding along)
- *   "pduSessionId"     N1N2MessageTransferReqData.PduSessionId   (int; which PDU session this N1/N2 pair targets)
- *   "resourceStatus"   StatusInfo.ResourceStatus                 (ACTIVATED/RELEASED -- SmContextStatusNotify)
- *   "cause"            StatusInfo.Cause /
- *                       PcfAmPolicyControlTerminationNotification.Cause (release/termination reason; shared key name, harmless overlap)
- *   "deregReason"      DeregistrationData.DeregReason            (drives old-AMF CLEANUP_REQUIRED)
- *   "triggers"         PcfAmPolicyControlPolicyUpdate.Triggers   (first element only; e.g. SERV_AREA_CH)
- *   "supi"             AmfEventSubscription.Supi                 (subscription target UE)
- *   "nfId"             AmfEventSubscription.NfId                 (requester NF instance -- correlate against the
- *                                                                 Authorization-header capture below for the
- *                                                                 cross-service scope-bypass finding)
- *   "type"             AmfEvent.Type (eventList[0])              (LOCATION_REPORT/REGISTRATION_STATE_REPORT/...;
- *                                                                 ambiguous if another object earlier in the body also
- *                                                                 has a "type" key -- best effort only)
+ *   "reason"       UeContextTransferReqData.Reason  (INIT_REG / MOBI_REG / MOBI_REG_UE_VALIDATED
+ *                                                     -- registration vs mobility handoff, CONTEXT_LOOKUP edge)
+ *   "accessType"   *.AccessType                      (3GPP_ACCESS vs NON_3GPP_ACCESS -- cross-check against the NAS side)
+ *   "cause"        StatusInfo.Cause /
+ *                   PcfAmPolicyControlTerminationNotification.Cause (release/termination reason; shared key name, harmless overlap)
+ *   "deregReason"  DeregistrationData.DeregReason    (drives old-AMF CLEANUP_REQUIRED)
+ *   "nfId"         AmfEventSubscription.NfId         (requester NF instance -- correlate against the
+ *                                                      Authorization-header capture below for the
+ *                                                      cross-service scope-bypass finding)
+ *
+ * Other IEs from the original analysis (n1MessageClass, pduSessionId,
+ * resourceStatus, triggers, supi, eventList[].type) are NOT captured here
+ * anymore -- add a row to sbi_ie_keys[]/event_sbi_body if one of them
+ * becomes load-bearing again; the loop scales to more entries for free,
+ * the struct doesn't.
  *
  * This is NOT a JSON parser: no nesting/escaping awareness, first textual
- * match wins, and the scan window is capped at IE_SCAN_MAX bytes -- every key
- * above is a top-level field declared near the start of its Go struct (and
- * `encoding/json` emits fields in declaration order), so in every example
- * body shown in observe.md each key lands well inside that window even
- * though the full body can run longer (e.g. HTTPCreateSubscription's
- * eventList). Good enough to flag the state-transition-relevant IEs the
- * attack analysis calls out; anything more exact belongs in a userspace
- * consumer that actually runs openapi.Deserialize() equivalent logic against
- * the correlated amf_sbi_* entry-probe method+path.
+ * match wins, and the scan window is capped at IE_SCAN_MAX bytes -- every
+ * key above is a top-level field declared near the start of its Go struct
+ * (and `encoding/json` emits fields in declaration order), so in every
+ * example body shown in observe.md each key lands well inside that window.
+ * Good enough to flag the state-transition-relevant IEs the attack analysis
+ * calls out; anything more exact belongs in a userspace consumer that
+ * actually runs openapi.Deserialize() equivalent logic against the
+ * correlated amf_sbi_* entry-probe method+path.
  * ---------------------------------------------------------------------------
  */
 
-#define IE_SCAN_MAX 256  /* bytes of body scanned for each key; every top-level
-			  * key used below appears well inside this window in
-			  * every example body in observe.md. */
-#define IE_KEY_MAX  17   /* longest key literal below ("resourceStatus":, "n1MessageClass":), incl. quotes/colon */
+#define IE_SCAN_MAX 256  /* bytes of body scanned for each key; every key in
+			  * sbi_ie_keys[] below appears well inside this
+			  * window in every example body in observe.md. */
+#define IE_KEY_MAX  14   /* longest key literal in sbi_ie_keys[] ("deregReason":), incl. quotes/colon */
 /* IE_STR_MAX: amf_func_load_events.h (it's part of event_sbi_body's layout) */
 
 struct find_key_ctx {
@@ -672,7 +669,18 @@ struct find_key_ctx {
  * one (parameterized via find_key_ctx, not per-key template expansion)
  * means its own small #pragma-unrolled inner key-compare loop (bounded by
  * IE_KEY_MAX, not IE_SCAN_MAX) is verified exactly once, not 13 times.
- */
+ *
+ * c->body is read via bpf_probe_read_kernel(), NOT direct indexing
+ * (c->body[...]), even though it's kernel/ringbuf memory this program owns
+ * outright: the verifier's callback-boundary type tracking doesn't carry
+ * the original PTR_TO_MEM bound on `body` through the round trip into
+ * find_key_ctx and back out through bpf_loop()'s generic `void *ctx` --
+ * direct indexing here fails load with "R7 unbounded memory access, make
+ * sure to bounds check any such access" even though every index is
+ * provably in range. bpf_probe_read_kernel() sidesteps that: like
+ * bpf_probe_read_user() used everywhere else in this file for pointers
+ * the verifier can't statically bound (arbitrary Go heap addresses), it
+ * does its own runtime-safe check instead of demanding static proof. */
 static long find_key_cb(__u32 i, void *ctx)
 {
 	struct find_key_ctx *c = ctx;
@@ -680,13 +688,18 @@ static long find_key_cb(__u32 i, void *ctx)
 	if (i >= IE_SCAN_MAX || i + c->key_len > c->body_len)
 		return 1; /* stop -- past the scan window, or past the body itself */
 
+	__u8 window[IE_KEY_MAX];
+
+	if (bpf_probe_read_kernel(window, IE_KEY_MAX, c->body + i))
+		return 1; /* unreadable at this offset -- stop rather than compare garbage */
+
 	__u8 match = 1;
 
 #pragma unroll
 	for (__u32 j = 0; j < IE_KEY_MAX; j++) {
 		if (j >= c->key_len)
 			break;
-		if (c->body[i + j] != (__u8)c->key[j]) {
+		if (window[j] != (__u8)c->key[j]) {
 			match = 0;
 			break;
 		}
@@ -754,94 +767,54 @@ static __always_inline void json_extract_str(const __u8 *body, __u32 body_len, _
 	}
 }
 
-/* Parses a bare JSON integer (optional '-', then digits) starting at/after
- * `pos`. Only writes *out / sets *has_out when at least one digit was read,
- * so an absent field is distinguishable from a literal 0. */
-static __always_inline void json_extract_int(const __u8 *body, __u32 body_len, __u32 pos, __s32 *out, __u8 *has_out)
-{
-	if (pos >= SBI_BODY_MAX - 24) /* see json_extract_str's comment on why this bound is needed */
-		return;
+/* The 5 keys sbi_parse_ies() looks for -- see the big comment block above
+ * IE_SCAN_MAX for what each maps to and why these 5. Both arrays are
+ * indexed together; sbi_ie_key_lens[] is precomputed (sizeof(lit)-1) so
+ * json_find_key() never needs a runtime strlen(). */
+#define SBI_IE_KEY_CNT 5
 
-#pragma unroll
-	for (int k = 0; k < 4; k++) {
-		if (pos < body_len && (body[pos] == ' ' || body[pos] == '\t'))
-			pos++;
-	}
+static const char *const sbi_ie_keys[SBI_IE_KEY_CNT] = {
+	"\"reason\":",
+	"\"accessType\":",
+	"\"cause\":",
+	"\"deregReason\":",
+	"\"nfId\":",
+};
+static const __u32 sbi_ie_key_lens[SBI_IE_KEY_CNT] = {
+	sizeof("\"reason\":") - 1,
+	sizeof("\"accessType\":") - 1,
+	sizeof("\"cause\":") - 1,
+	sizeof("\"deregReason\":") - 1,
+	sizeof("\"nfId\":") - 1,
+};
 
-	__s32 sign = 1;
-
-	if (pos < body_len && body[pos] == '-') {
-		sign = -1;
-		pos++;
-	}
-
-	__s32 val = 0;
-	__u8 got_digit = 0;
-
-#pragma unroll
-	for (__u32 i = 0; i < 10; i++) {
-		if (pos + i >= body_len)
-			break;
-		__u8 c = body[pos + i];
-
-		if (c < '0' || c > '9')
-			break;
-		val = val * 10 + (c - '0');
-		got_digit = 1;
-	}
-	if (got_digit) {
-		*out = val * sign;
-		*has_out = 1;
-	}
-}
-
-#define IE_STR_FIELD(body, len, lit, dst) \
-	do { \
-		int __pos = json_find_key((body), (len), (lit), sizeof(lit) - 1); \
-		if (__pos >= 0) \
-			json_extract_str((body), (len), (__u32)__pos, (dst), sizeof(dst)); \
-	} while (0)
-
+/* A real `for` loop over sbi_ie_keys[]/sbi_ie_key_lens[], not one hand-
+ * written json_find_key()+json_extract_str() call site per key -- `k` is a
+ * compile-time constant on every one of the 5 unrolled iterations (this
+ * loop bound is tiny, nothing like the IE_SCAN_MAX/IE_KEY_MAX unrolling
+ * that had to move to bpf_loop() above), so the switch below folds down to
+ * exactly one direct, named-field write per iteration -- e->reason,
+ * e->access_type, etc. -- never a computed/offset pointer into `e`. */
 static __always_inline void sbi_parse_ies(struct event_sbi_body *e)
 {
 	const __u8 *body = e->body;
 	__u32 len = e->body_len;
 
-	IE_STR_FIELD(body, len, "\"reason\":", e->reason);
-
-	IE_STR_FIELD(body, len, "\"accessType\":", e->access_type);
-	if (e->access_type[0] == 0)
-		IE_STR_FIELD(body, len, "\"anType\":", e->access_type);
-	if (e->access_type[0] == 0)
-		IE_STR_FIELD(body, len, "\"targetAccess\":", e->access_type);
-
-	IE_STR_FIELD(body, len, "\"n1MessageClass\":", e->n1_message_class);
-	IE_STR_FIELD(body, len, "\"resourceStatus\":", e->resource_status);
-	IE_STR_FIELD(body, len, "\"cause\":", e->cause);
-	IE_STR_FIELD(body, len, "\"deregReason\":", e->dereg_reason);
-	IE_STR_FIELD(body, len, "\"supi\":", e->supi);
-	IE_STR_FIELD(body, len, "\"nfId\":", e->nf_id);
-	IE_STR_FIELD(body, len, "\"type\":", e->event_type0);
-
-	int trig_pos = json_find_key(body, len, "\"triggers\":", sizeof("\"triggers\":") - 1);
-
-	if (trig_pos >= 0) {
-		__u32 p = (__u32)trig_pos;
-
-		/* skip whitespace and the array's opening '[' before treating
-		 * the first element like a plain string value */
 #pragma unroll
-		for (int k = 0; k < 4; k++) {
-			if (p < len && (body[p] == ' ' || body[p] == '['))
-				p++;
+	for (__u32 k = 0; k < SBI_IE_KEY_CNT; k++) {
+		int pos = json_find_key(body, len, sbi_ie_keys[k], sbi_ie_key_lens[k]);
+
+		if (pos < 0)
+			continue;
+
+		switch (k) {
+		case 0: json_extract_str(body, len, (__u32)pos, e->reason, IE_STR_MAX); break;
+		case 1: json_extract_str(body, len, (__u32)pos, e->access_type, IE_STR_MAX); break;
+		case 2: json_extract_str(body, len, (__u32)pos, e->cause, IE_STR_MAX); break;
+		case 3: json_extract_str(body, len, (__u32)pos, e->dereg_reason, IE_STR_MAX); break;
+		case 4: json_extract_str(body, len, (__u32)pos, e->nf_id, IE_STR_MAX); break;
 		}
-		json_extract_str(body, len, p, e->trigger0, IE_STR_MAX);
 	}
-
-	int pdu_pos = json_find_key(body, len, "\"pduSessionId\":", sizeof("\"pduSessionId\":") - 1);
-
-	if (pdu_pos >= 0)
-		json_extract_int(body, len, (__u32)pdu_pos, &e->pdu_session_id, &e->has_pdu_session_id);
 }
 
 SEC("uretprobe")

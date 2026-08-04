@@ -236,16 +236,9 @@ static void print_sbi_body(const struct event_sbi_body *e)
 
     PRINT_IE_STR("reason", e->reason);
     PRINT_IE_STR("accessType", e->access_type);
-    PRINT_IE_STR("n1MessageClass", e->n1_message_class);
-    if (e->has_pdu_session_id)
-        printf("    %-16s %d\n", "pduSessionId:", e->pdu_session_id);
-    PRINT_IE_STR("resourceStatus", e->resource_status);
     PRINT_IE_STR("cause", e->cause);
     PRINT_IE_STR("deregReason", e->dereg_reason);
-    PRINT_IE_STR("trigger0", e->trigger0);
-    PRINT_IE_STR("supi", e->supi);
     PRINT_IE_STR("nfId", e->nf_id);
-    PRINT_IE_STR("eventType0", e->event_type0);
 }
 
 static void print_sbi_authz(const struct event_sbi_authz *e)
