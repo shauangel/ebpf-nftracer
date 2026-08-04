@@ -108,11 +108,21 @@ struct {
  * starts with a __u64, so C's own struct-layout rules pad the *total* size
  * up to a multiple of the struct's 8-byte alignment requirement regardless
  * of what's declared after it.
+ *
+ * The store pointer is `volatile` -- NOT for memory-visibility semantics
+ * (this is single-threaded per-invocation scratch memory), but because
+ * without it LLVM's LoopIdiomRecognize pass (-O2) pattern-matches "a loop
+ * that stores zero across a contiguous range" and rewrites it right back
+ * into a memset()/llvm.memset call of its own accord, walking straight
+ * back into the exact same "not supported" error this was written to
+ * avoid -- #pragma unroll alone doesn't stop it, since idiom recognition
+ * can fire on the loop before unrolling ever happens. A volatile store
+ * can't be coalesced into a library call, which defeats the pattern match.
  */
 #define ZERO_EVENT(e) \
 	do { \
 		_Static_assert(sizeof(*(e)) % 8 == 0, "event struct size must be a multiple of 8"); \
-		__u64 *_zp = (__u64 *)(e); \
+		volatile __u64 *_zp = (volatile __u64 *)(e); \
 		_Pragma("unroll") \
 		for (__u32 _zi = 0; _zi < sizeof(*(e)) / 8; _zi++) \
 			_zp[_zi] = 0; \
