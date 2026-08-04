@@ -86,6 +86,38 @@ struct {
 	__uint(max_entries, 1 << 20); /* 1 MiB */
 } events SEC(".maps");
 
+/*
+ * Every event_* probe below reserves its own struct off `events` and needs
+ * it zeroed first (bpf_ringbuf_reserve() does NOT zero the memory it hands
+ * back -- it can be leftover bytes from a previous event) -- but plain
+ * `__builtin_memset(e, 0, sizeof(*e))` only works for small, compile-time
+ * sizes on the BPF target: past clang's inlining threshold it tries to
+ * lower to a real memset() *libcall*, which BPF has no libc to resolve
+ * ("call to built-in function 'memset' is not supported"). Every event_*
+ * struct here (amf_func_load_events.h) is well past that threshold -- the
+ * smallest is ~560 bytes (event_ngap's nas_pdu[512]), the largest ~1.3KB
+ * (event_sbi_body's body[1024] plus the parsed-IE fields).
+ *
+ * Fixed with the standard eBPF workaround: a #pragma-unrolled loop of
+ * 8-byte word stores, with the unroll count computed from sizeof(*(e)) AT
+ * THE MACRO'S EXPANSION SITE, so each call site gets an unroll bound
+ * that's an exact compile-time constant for ITS OWN struct -- no shared
+ * "size to the largest struct, break early for smaller ones" logic that
+ * would depend on the optimizer proving the extra iterations dead. The
+ * sizeof(*(e))%8==0 assumption always holds here: every event_* struct
+ * starts with a __u64, so C's own struct-layout rules pad the *total* size
+ * up to a multiple of the struct's 8-byte alignment requirement regardless
+ * of what's declared after it.
+ */
+#define ZERO_EVENT(e) \
+	do { \
+		_Static_assert(sizeof(*(e)) % 8 == 0, "event struct size must be a multiple of 8"); \
+		__u64 *_zp = (__u64 *)(e); \
+		_Pragma("unroll") \
+		for (__u32 _zi = 0; _zi < sizeof(*(e)) / 8; _zi++) \
+			_zp[_zi] = 0; \
+	} while (0)
+
 /* ======================================================================== */
 /* NGAP: ngap.dispatchMain(ran *context.AmfRan, message *ngapType.NGAPPDU)  */
 /* ======================================================================== */
@@ -257,7 +289,7 @@ int amf_ngap_disp(struct pt_regs *ctx)
 	struct event_ngap *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
 	if (!e)
 		return 0;
-	__builtin_memset(e, 0, sizeof(*e));
+	ZERO_EVENT(e);
 
 	e->ts_ns = bpf_ktime_get_ns();
 	e->pid = bpf_get_current_pid_tgid() >> 32;
@@ -310,7 +342,7 @@ int amf_nas_disp(struct pt_regs *ctx)
 	struct event_nas *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
 	if (!e)
 		return 0;
-	__builtin_memset(e, 0, sizeof(*e));
+	ZERO_EVENT(e);
 
 	e->ts_ns = bpf_ktime_get_ns();
 	e->pid = bpf_get_current_pid_tgid() >> 32;
@@ -419,7 +451,7 @@ static __always_inline int emit_sbi_event(struct pt_regs *ctx, enum amf_probe_id
 	struct event_sbi *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
 	if (!e)
 		return 0;
-	__builtin_memset(e, 0, sizeof(*e));
+	ZERO_EVENT(e);
 
 	e->ts_ns = bpf_ktime_get_ns();
 	e->pid = bpf_get_current_pid_tgid() >> 32;
@@ -778,7 +810,7 @@ int amf_sbi_body(struct pt_regs *ctx)
 	struct event_sbi_body *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
 	if (!e)
 		return 0;
-	__builtin_memset(e, 0, sizeof(*e));
+	ZERO_EVENT(e);
 
 	e->ts_ns = bpf_ktime_get_ns();
 	e->pid = bpf_get_current_pid_tgid() >> 32;
@@ -891,7 +923,7 @@ int amf_http_hdr_get_ret(struct pt_regs *ctx)
 	struct event_sbi_authz *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
 	if (!e)
 		return 0;
-	__builtin_memset(e, 0, sizeof(*e));
+	ZERO_EVENT(e);
 
 	e->ts_ns = bpf_ktime_get_ns();
 	e->pid = tid >> 32;
